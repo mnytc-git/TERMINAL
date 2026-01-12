@@ -16,27 +16,42 @@
       };
       
       onStart = {
-
-        prepull-kali = ''
+        
+        # 1. Pastikan Image ada dulu
+        git-pull-kali = ''
           docker pull kalilinux/kali-rolling || true
         '';
 
+        # 2. Inject Logic ke .bashrc
         inject-bashrc = ''
-          # Cek apakah script sudah ada di bashrc host agar tidak duplikat
+          # Tunggu sebentar untuk memastikan file system siap
+          sleep 2
+          
+          # Cek apakah script sudah ada di bashrc agar tidak duplikat
           if ! grep -q "KALI_NAME=\"kali-persistent\"" ~/.bashrc; then
+            
+            echo "Menambahkan Script Auto-Start Kali ke .bashrc..."
             
             cat << 'EOF' >> ~/.bashrc
 
 # --- KALI LINUX AUTO-START LOGIC ---
+# Hanya jalankan jika mode interaktif (Terminal User)
 if [[ $- == *i* ]]; then
     KALI_NAME="kali-persistent"
+    
+    # Cek apakah Docker Daemon sudah jalan
+    if ! docker info > /dev/null 2>&1; then
+        echo "⏳ Menunggu Docker Daemon..."
+        sleep 3
+    fi
 
     # 1. Cek & Jalankan Container
     if ! docker ps --format '{{.Names}}' | grep -q "^$KALI_NAME$"; then
+        echo "🐳 Menjalankan Container Kali Linux..."
         docker start $KALI_NAME > /dev/null 2>&1 || docker run -t -d --name $KALI_NAME --hostname Bang -v "$(pwd)":/kali -w /kali kalilinux/kali-rolling > /dev/null
     fi
 
-    # 2. Setup Dasar (Fastfetch & Python venv) - Cepat
+    # 2. Setup Dasar (Fastfetch & Python venv)
     if ! docker exec $KALI_NAME test -f /root/.setup_basic_done; then
         echo "⚙️  Setup dasar (Update & Venv)..."
         docker exec $KALI_NAME apt update > /dev/null 2>&1
@@ -44,33 +59,32 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME touch /root/.setup_basic_done
     fi
 
-    # 3. INSTALASI TOOLS BERAT (Hacking Tools) - Hanya jalan jika belum ada
+    # 3. INSTALASI TOOLS BERAT
     if ! docker exec $KALI_NAME test -f /root/.full_tools_installed; then
         echo "======================================================"
         echo "🚀 Mendeteksi instalasi pertama..."
-        echo "📦 Sedang menginstall Tools Hacking & Dependensi..."
-        echo "☕ Ini akan memakan waktu lumayan lama, mohon tunggu..."
+        echo "📦 Sedang menginstall Tools Hacking..."
         echo "======================================================"
         
-        # Jalankan Install
+        # Install tanpa interupsi
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git curl wget nano zip unzip sqlmap wpscan joomscan htop whatweb dirsearch nikto wafw00f ffuf nuclei zaproxy speedtest-cli finalrecon subfinder httpx-toolkit naabu amass python3-pip golang-go nmap"
         
         if [ $? -eq 0 ]; then
             docker exec $KALI_NAME touch /root/.full_tools_installed
-            echo "✅ Instalasi Tools Selesai!"
-            sleep 2 # Jeda sebentar agar user sempat baca tulisan selesai
+            echo "✅ Instalasi Selesai!"
+            sleep 2
         else
-            echo "❌ Terjadi kesalahan saat install tools."
+            echo "❌ Gagal install tools. Coba restart environment."
         fi
     fi
 
-    # 4. Buat Python venv jika folder 'myenv' belum ada
+    # 4. Buat Venv jika hilang
     if ! docker exec $KALI_NAME test -d /kali/myenv; then
-        echo "🐍 Membuat Python Virtual Environment (myenv)..."
+        echo "🐍 Membuat Python Venv..."
         docker exec $KALI_NAME python3 -m venv /kali/myenv
     fi
 
-    # 5. Konfigurasi .bashrc Internal Container
+    # 5. Konfigurasi .bashrc Internal
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
         docker exec $KALI_NAME sed -i '/fastfetch/d' /root/.bashrc
         docker exec $KALI_NAME sed -i '/activate/d' /root/.bashrc
@@ -78,15 +92,14 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME bash -c "echo \"fastfetch | sed 's/Google Compute Engine/Government Bang/g'\" >> /root/.bashrc"
     fi
 
-    # 6. BERSIHKAN LAYAR & MASUK
-    # Perintah 'clear' di sini akan menghapus semua output log install di atas
+    # 6. BERSIHKAN & MASUK
     clear
-    
     exec docker exec -it $KALI_NAME /bin/bash
 fi
 # -----------------------------------
-
 EOF
+          else
+            echo "Script Kali sudah ada di .bashrc"
           fi
         '';
       };
