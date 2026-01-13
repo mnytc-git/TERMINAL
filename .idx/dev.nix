@@ -17,42 +17,33 @@
       
       onStart = {
         
-        # 1. Pastikan Image ada dulu
-        git-pull-kali = ''
-          docker pull kalilinux/kali-rolling || true
-        '';
+        # GABUNGKAN SEMUA DI SINI AGAR HANYA 1 PROSES (TIDAK BANYAK TAB)
+        setup = ''
+          # 1. Pull Image secara diam-diam (Silent)
+          docker pull kalilinux/kali-rolling > /dev/null 2>&1 || true
 
-        # 2. Inject Logic ke .bashrc
-        inject-bashrc = ''
-          # Tunggu sebentar untuk memastikan file system siap
-          sleep 2
-          
-          # Cek apakah script sudah ada di bashrc agar tidak duplikat
+          # 2. Inject Logic ke .bashrc (Tanpa output text di host)
           if ! grep -q "KALI_NAME=\"kali-persistent\"" ~/.bashrc; then
-            
-            echo "Menambahkan Script Auto-Start Kali ke .bashrc..."
             
             cat << 'EOF' >> ~/.bashrc
 
 # --- KALI LINUX AUTO-START LOGIC ---
-# Hanya jalankan jika mode interaktif (Terminal User)
 if [[ $- == *i* ]]; then
     KALI_NAME="kali-persistent"
     
-    # Cek apakah Docker Daemon sudah jalan
+    # Tunggu Docker Daemon siap (Silent)
     if ! docker info > /dev/null 2>&1; then
-        echo "⏳ Menunggu Docker Daemon..."
         sleep 3
     fi
 
-    # 1. Cek & Jalankan Container
+    # 1. Cek & Jalankan Container (Silent di Host)
     if ! docker ps --format '{{.Names}}' | grep -q "^$KALI_NAME$"; then
-        echo "🐳 Menjalankan Container Kali Linux..."
         docker start $KALI_NAME > /dev/null 2>&1 || docker run -t -d --name $KALI_NAME --hostname Bang -v "$(pwd)":/kali -w /kali kalilinux/kali-rolling > /dev/null
     fi
 
     # 2. Setup Dasar (Fastfetch & Python venv)
     if ! docker exec $KALI_NAME test -f /root/.setup_basic_done; then
+        # Tampilkan progress HANYA saat user masuk terminal
         echo "⚙️  Setup dasar (Update & Venv)..."
         docker exec $KALI_NAME apt update > /dev/null 2>&1
         docker exec $KALI_NAME apt install -y fastfetch python3-venv > /dev/null 2>&1
@@ -66,7 +57,7 @@ if [[ $- == *i* ]]; then
         echo "📦 Sedang menginstall Tools Hacking..."
         echo "======================================================"
         
-        # Install tanpa interupsi
+        # Install 
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git curl wget nano zip unzip sqlmap wpscan joomscan htop whatweb dirsearch nikto wafw00f ffuf nuclei zaproxy speedtest-cli finalrecon subfinder httpx-toolkit naabu amass python3-pip golang-go nmap"
         
         if [ $? -eq 0 ]; then
@@ -84,7 +75,7 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME python3 -m venv /kali/myenv
     fi
 
-    # 5. Konfigurasi .bashrc Internal
+    # 5. Konfigurasi .bashrc Internal (Agar Fastfetch muncul & Prompt rapi)
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
         docker exec $KALI_NAME sed -i '/fastfetch/d' /root/.bashrc
         docker exec $KALI_NAME sed -i '/activate/d' /root/.bashrc
@@ -98,8 +89,6 @@ if [[ $- == *i* ]]; then
 fi
 # -----------------------------------
 EOF
-          else
-            echo "Script Kali sudah ada di .bashrc"
           fi
         '';
       };
