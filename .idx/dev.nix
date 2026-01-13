@@ -54,7 +54,7 @@ if [[ $- == *i* ]]; then
         echo "======================================================"
         
         # Install 
-        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git curl wget nano zip unzip sqlmap wpscan joomscan htop whatweb dirsearch nikto wafw00f ffuf nuclei zaproxy speedtest-cli finalrecon subfinder httpx-toolkit naabu amass python3-pip golang-go nmap"
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git"
         
         if [ $? -eq 0 ]; then
             docker exec $KALI_NAME touch /root/.full_tools_installed
