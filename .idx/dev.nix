@@ -11,18 +11,15 @@
     
     workspace = {
       
+      # LOGIKA PINDAH KE SINI (Jalan di Background saat Rebuild/Create)
       onCreate = {
-        default.openFiles = [ ".idx/dev.nix" "README.md" ];
-      };
-      
-      onStart = {
+        default.openFiles = [ "README.md" ];
         
-        # GABUNGKAN SEMUA DI SINI AGAR HANYA 1 PROSES (TIDAK BANYAK TAB)
-        setup = ''
-          # 1. Pull Image secara diam-diam (Silent)
-          docker pull kalilinux/kali-rolling > /dev/null 2>&1 || true
-
-          # 2. Inject Logic ke .bashrc (Tanpa output text di host)
+        # Script ini hanya menyisipkan kode ke .bashrc satu kali.
+        # Tidak akan membuka tab terminal saat start.
+        setup-kali-config = ''
+          
+          # Cek apakah script sudah ada di bashrc agar tidak duplikat
           if ! grep -q "KALI_NAME=\"kali-persistent\"" ~/.bashrc; then
             
             cat << 'EOF' >> ~/.bashrc
@@ -33,17 +30,16 @@ if [[ $- == *i* ]]; then
     
     # Tunggu Docker Daemon siap (Silent)
     if ! docker info > /dev/null 2>&1; then
-        sleep 3
+        sleep 1
     fi
 
-    # 1. Cek & Jalankan Container (Silent di Host)
+    # 1. Cek & Jalankan Container (Otomatis pull jika image belum ada)
     if ! docker ps --format '{{.Names}}' | grep -q "^$KALI_NAME$"; then
         docker start $KALI_NAME > /dev/null 2>&1 || docker run -t -d --name $KALI_NAME --hostname Bang -v "$(pwd)":/kali -w /kali kalilinux/kali-rolling > /dev/null
     fi
 
     # 2. Setup Dasar (Fastfetch & Python venv)
     if ! docker exec $KALI_NAME test -f /root/.setup_basic_done; then
-        # Tampilkan progress HANYA saat user masuk terminal
         echo "⚙️  Setup dasar (Update & Venv)..."
         docker exec $KALI_NAME apt update > /dev/null 2>&1
         docker exec $KALI_NAME apt install -y fastfetch python3-venv > /dev/null 2>&1
@@ -75,7 +71,7 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME python3 -m venv /kali/myenv
     fi
 
-    # 5. Konfigurasi .bashrc Internal (Agar Fastfetch muncul & Prompt rapi)
+    # 5. Konfigurasi .bashrc Internal
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
         docker exec $KALI_NAME sed -i '/fastfetch/d' /root/.bashrc
         docker exec $KALI_NAME sed -i '/activate/d' /root/.bashrc
@@ -92,6 +88,9 @@ EOF
           fi
         '';
       };
+      
+      # BIARKAN KOSONG AGAR TIDAK ADA TAB MUNCUL
+      onStart = { };
     };
   };
 }
