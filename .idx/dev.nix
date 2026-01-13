@@ -16,12 +16,15 @@
 
         setup-kali-config = ''
           
-          if ! grep -q "KALI_NAME=\"kali-persistent\"" ~/.bashrc; then
+          if ! grep -q "KALI_NAME=\"Bang\"" ~/.bashrc; then
             
             cat << 'EOF' >> ~/.bashrc
 
 if [[ $- == *i* ]]; then
-    KALI_NAME="kali-persistent"
+
+    KALI_NAME="Bang" 
+    # -------------------------
+
     if ! docker info > /dev/null 2>&1; then
         sleep 1
     fi
@@ -39,7 +42,7 @@ if [[ $- == *i* ]]; then
 
     if ! docker exec $KALI_NAME test -f /root/.full_tools_installed; then
         echo "======================================================"
-        echo "🚀 Mendeteksi instalasi pertama..."
+        echo "🚀 Mendeteksi instalasi pertama untuk container: $KALI_NAME..."
         echo "📦 Sedang menginstall Tools Hacking..."
         echo "======================================================"
 
@@ -54,7 +57,6 @@ if [[ $- == *i* ]]; then
         fi
     fi
 
-    # 4. Buat Venv jika hilang
     if ! docker exec $KALI_NAME test -d /kali/myenv; then
         echo "🐍 Membuat Python Venv..."
         docker exec $KALI_NAME python3 -m venv /kali/myenv
