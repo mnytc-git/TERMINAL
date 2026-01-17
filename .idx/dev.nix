@@ -22,23 +22,20 @@
             cat << 'EOF' >> ~/.bashrc
 
 if [[ $- == *i* ]]; then
-    # 1. GANTI NAMA CONTAINER JADI BANG
+
     KALI_NAME="Bang"
 
-    # Set Judul Tab Terminal Sidebar menjadi "Bang"
     echo -ne "\033]0;Bang\007"
 
     if ! docker info > /dev/null 2>&1; then
         sleep 1
     fi
 
-    # Cek apakah container Bang sudah jalan
     if ! docker ps --format '{{.Names}}' | grep -q "^$KALI_NAME$"; then
         # Start atau Run container dengan nama Bang
         docker start $KALI_NAME > /dev/null 2>&1 || docker run -t -d --name $KALI_NAME --hostname Bang -v "$(pwd)":/kali -w /kali kalilinux/kali-rolling > /dev/null
     fi
 
-    # Setup Dasar
     if ! docker exec $KALI_NAME test -f /root/.setup_basic_done; then
         echo "⚙️  Setup dasar (Update & Venv)..."
         docker exec $KALI_NAME apt update > /dev/null 2>&1
@@ -46,14 +43,13 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME touch /root/.setup_basic_done
     fi
 
-    # Install Tools
     if ! docker exec $KALI_NAME test -f /root/.full_tools_installed; then
         echo "======================================================"
         echo "🚀 Mendeteksi instalasi pertama..."
         echo "📦 Sedang menginstall Tools Hacking..."
         echo "======================================================"
 
-        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git"
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git sudo"
         
         if [ $? -eq 0 ]; then
             docker exec $KALI_NAME touch /root/.full_tools_installed
@@ -64,13 +60,11 @@ if [[ $- == *i* ]]; then
         fi
     fi
 
-    # Buat Venv
     if ! docker exec $KALI_NAME test -d /kali/myenv; then
         echo "🐍 Membuat Python Venv..."
         docker exec $KALI_NAME python3 -m venv /kali/myenv
     fi
 
-    # Config Bashrc dalam container
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
         docker exec $KALI_NAME sed -i '/fastfetch/d' /root/.bashrc
         docker exec $KALI_NAME sed -i '/activate/d' /root/.bashrc
@@ -79,11 +73,9 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME bash -c "echo \"fastfetch | sed 's/Google Compute Engine/Government Bang/g'\" >> /root/.bashrc"
     fi
 
-    # Paksa judul terminal lagi sebelum masuk (untuk memastikan)
     echo -ne "\033]0;Bang\007"
     
     clear
-    # Masuk ke container
     exec docker exec -it $KALI_NAME /bin/bash
 fi
 EOF
