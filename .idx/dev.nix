@@ -15,8 +15,7 @@
         default.openFiles = [ "README.md" ];
 
         setup-kali-config = ''
-          
-          # Cek apakah konfigurasi Bang sudah ada di .bashrc
+
           if ! grep -q "KALI_NAME=\"Bang\"" ~/.bashrc; then
             
             cat << 'EOF' >> ~/.bashrc
@@ -32,7 +31,7 @@ if [[ $- == *i* ]]; then
     fi
 
     if ! docker ps --format '{{.Names}}' | grep -q "^$KALI_NAME$"; then
-        # Start atau Run container dengan nama Bang
+
         docker start $KALI_NAME > /dev/null 2>&1 || docker run -t -d --name $KALI_NAME --hostname Bang -v "$(pwd)":/kali -w /kali kalilinux/kali-rolling > /dev/null
     fi
 
@@ -49,7 +48,7 @@ if [[ $- == *i* ]]; then
         echo "📦 Sedang menginstall Tools Hacking..."
         echo "======================================================"
 
-        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git sudo"
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git sudo golang"
         
         if [ $? -eq 0 ]; then
             docker exec $KALI_NAME touch /root/.full_tools_installed
