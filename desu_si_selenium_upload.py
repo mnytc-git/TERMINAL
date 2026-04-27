@@ -483,7 +483,7 @@ def convert_to_direct_link(desu_link: str) -> str:
     return desu_link
 
 
-def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=1):
+def execute_script_with_retry(driver, script, *args, max_retries=2, retry_delay=0.5):
     """Execute JavaScript with retry logic to handle timeout and stale element."""
     for attempt in range(max_retries):
         try:
@@ -492,7 +492,7 @@ def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=
             exc_str = str(exc).lower()
             if 'timeout' in exc_str or 'read timed out' in exc_str:
                 if attempt < max_retries - 1:
-                    logging.debug('Script execution timeout (attempt %d/%d), retrying in %d seconds...', attempt + 1, max_retries, retry_delay)
+                    logging.debug('Script execution timeout (attempt %d/%d), retrying in %.1f seconds...', attempt + 1, max_retries, retry_delay)
                     time.sleep(retry_delay)
                     continue
                 else:
@@ -502,6 +502,7 @@ def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=
                 logging.debug('Stale element reference in script, skipping...')
                 return None
             else:
+                # For other errors, don't retry
                 raise
     return None
 
@@ -678,45 +679,97 @@ def upload_via_browser(file_path: str) -> str | None:
         start_time = time.time()
         check_interval = 2  # Reduced from 5s to 2s for faster detection
 
+        # Wait for upload completion - check for link or success message
+        # For large files, use infinite wait as upload can take hours
+        max_wait_seconds = 86400  # 24 hours max
+
         def check_upload_complete():
             try:
-                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2, retry_delay=1)
+                # Get page content and URL
+                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.5)
                 if not page:
                     return False, None
-                    
+
                 page_lower = page.lower()
-                
+
                 try:
                     url = driver.current_url.lower()
                 except:
                     url = ''
 
-                # Check for desu.si link in page or URL
+                # Check for desu.si link in page or URL - most important check first
                 link = extract_link_from_html(page)
                 if link:
+                    logging.info('Upload completed! Link found in page.')
                     return True, link
 
+                # Check if redirected to result page
                 if url and 'desu.si/' in url and url != UPLOAD_URL.lower():
-                    logging.info('Redirect detected to: %s', url)
+                    logging.info('Redirect detected to result page: %s', url)
                     # Try extract from URL
                     url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', url)
                     if url_match:
-                        return True, f"https://desu.si/{url_match.group(1)}"
+                        link = f"https://desu.si/{url_match.group(1)}"
+                        logging.info('Link extracted from URL redirect.')
+                        return True, link
                     return True, url
 
-                # Check for success indicators
-                success_indicators = ['success', 'berhasil', 'complete', 'finished', 'uploaded', 'done']
+                # Check for success indicators in page content
+                success_indicators = [
+                    'upload successful', 'upload complete', 'file uploaded',
+                    'success', 'berhasil', 'complete', 'finished', 'uploaded', 'done',
+                    'your file has been uploaded', 'upload finished'
+                ]
                 for indicator in success_indicators:
                     if indicator in page_lower:
-                        logging.info('Detected success indicator: %s', indicator)
-                        return True, None
+                        logging.info('Detected success indicator: "%s"', indicator)
+                        # Try to find link in the success page
+                        link = extract_link_from_html(page)
+                        if link:
+                            return True, link
+                        # If no link found but success detected, continue checking
+                        break
 
                 # Check for error indicators
-                error_indicators = ['error', 'failed', 'gagal', 'invalid', 'too large', 'file size exceeded']
+                error_indicators = [
+                    'error', 'failed', 'gagal', 'invalid', 'too large',
+                    'file size exceeded', 'upload failed', 'file rejected'
+                ]
                 for indicator in error_indicators:
                     if indicator in page_lower:
-                        logging.warning('Detected error indicator: %s', indicator)
-                        return True, None
+                        logging.warning('Detected error indicator: "%s"', indicator)
+                        return True, None  # Stop waiting, upload failed
+
+                # Check if we're still on upload page (upload might be in progress)
+                # Look for upload progress indicators or form elements
+                upload_indicators = [
+                    'input type="file"', 'name="files[]"', 'upload', 'uploading',
+                    'progress', 'progressbar', 'file upload', 'select file'
+                ]
+
+                is_still_uploading = False
+                for indicator in upload_indicators:
+                    if indicator in page_lower:
+                        is_still_uploading = True
+                        break
+
+                # If no upload indicators found, page has likely changed to result page
+                if not is_still_uploading:
+                    logging.info('Upload page no longer detected, checking for result...')
+                    # Try to find any link as this might be a result page
+                    link = extract_link_from_html(page)
+                    if link:
+                        logging.info('Found result link after upload page disappeared.')
+                        return True, link
+                    # If no link but page changed, assume success and continue checking
+                    return False, None
+
+                # If we reach here, page has changed but no clear success/error
+                # This might be a result page, try to extract any link
+                link = extract_link_from_html(page)
+                if link:
+                    logging.info('Found link in result page.')
+                    return True, link
 
                 return False, None
             except Exception as exc:
@@ -724,18 +777,27 @@ def upload_via_browser(file_path: str) -> str | None:
                 return False, None
 
         link = None
+        check_count = 0
+        last_progress_log = 0
+
         while time.time() - start_time < max_wait_seconds:
             try:
                 is_complete, found_link = check_upload_complete()
                 if is_complete:
                     link = found_link
                     break
-                
+
+                check_count += 1
                 elapsed = int(time.time() - start_time)
-                logging.debug('Upload in progress... (elapsed: %d seconds)', elapsed)
+
+                # Log progress every 30 seconds or every 10 checks
+                if elapsed - last_progress_log >= 30 or check_count % 10 == 0:
+                    logging.info('Upload in progress... (elapsed: %d seconds, checks: %d)', elapsed, check_count)
+                    last_progress_log = elapsed
+
                 time.sleep(check_interval)
             except Exception as exc:
-                logging.debug('Error during upload monitoring: %s', exc)
+                logging.debug('Error during upload monitoring (check %d): %s', check_count, exc)
                 time.sleep(check_interval)
 
         if time.time() - start_time >= max_wait_seconds:
@@ -745,35 +807,50 @@ def upload_via_browser(file_path: str) -> str | None:
             logging.info('Upload berhasil, link ditemukan: %s', link)
             return convert_to_direct_link(link)
 
-        # If no link found yet, try to get current page state
-        try:
-            current_url = driver.current_url.lower()
-            page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2)
-            
-            if not page_source:
-                page_source = ''
-                
-            # Check if redirected
-            if current_url != UPLOAD_URL.lower():
-                logging.info('Current URL: %s', current_url)
-                if 'desu.si' in current_url:
-                    url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', current_url)
-                    if url_match:
-                        link = f"https://desu.si/{url_match.group(1)}"
-                        logging.info('Link extracted from URL: %s', link)
-                        return convert_to_direct_link(link)
-            
-            # Try one more time to find link in page
-            link = extract_link_from_html(page_source)
-            if link:
-                return convert_to_direct_link(link)
-                
-            logging.error('Upload selesai tapi link tidak ditemukan.')
-            logging.debug('Final URL: %s', current_url)
-            logging.debug('Final page source snippet: %s', page_source[:1000] if page_source else 'empty')
-        except Exception as exc:
-            logging.debug('Error getting final page state: %s', exc)
+        # If no link found yet, try to get current page state with multiple attempts
+        logging.info('Performing final link extraction checks...')
+        for attempt in range(3):
+            try:
+                # Try to refresh page to get final state
+                if attempt > 0:
+                    driver.refresh()
+                    time.sleep(2)
 
+                current_url = driver.current_url.lower()
+                page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2, retry_delay=0.5)
+
+                if not page_source:
+                    continue
+
+                # Check if redirected
+                if current_url and current_url != UPLOAD_URL.lower():
+                    logging.info('Final URL: %s', current_url)
+                    if 'desu.si' in current_url:
+                        url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', current_url)
+                        if url_match:
+                            link = f"https://desu.si/{url_match.group(1)}"
+                            logging.info('Link extracted from final URL: %s', link)
+                            return convert_to_direct_link(link)
+
+                # Try multiple extraction methods
+                link = extract_link_from_html(page_source)
+                if link:
+                    logging.info('Link extracted from final page content.')
+                    return convert_to_direct_link(link)
+
+                # Try to find any desu.si URL in the page
+                desu_urls = re.findall(r'https?://[^\s<>"\']*desu\.si[^\s<>"\']*', page_source)
+                if desu_urls:
+                    link = desu_urls[0]  # Take first desu.si URL found
+                    logging.info('Found desu.si URL in page: %s', link)
+                    return convert_to_direct_link(link)
+
+            except Exception as exc:
+                logging.debug('Error in final link extraction (attempt %d): %s', attempt + 1, exc)
+                time.sleep(1)
+
+        logging.error('Upload selesai tapi link tidak ditemukan setelah semua percobaan.')
+        logging.debug('Final URL: %s', current_url if 'current_url' in locals() else 'unknown')
         return None
 
     except Exception as exc:
