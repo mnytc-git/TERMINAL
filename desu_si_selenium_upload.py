@@ -27,9 +27,16 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.remote.remote_connection import RemoteConnection
 except ImportError:
     logging.error("Selenium belum terpasang. Jalankan: pip install selenium")
     sys.exit(1)
+
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except:
+    pass
 
 try:
     from webdriver_manager.chrome import ChromeDriverManager
@@ -335,6 +342,8 @@ def build_driver(chrome_path=None, driver_path=None):
     options.add_argument('--disable-infobars')
     options.add_argument('--disable-client-side-phishing-detection')
     options.add_argument('--enable-automation')
+    options.add_argument('--allow-running-insecure-content')
+    options.add_argument('--allow-insecure-localhost')
     options.add_experimental_option('excludeSwitches', ['enable-automation'])
     options.add_experimental_option('useAutomationExtension', False)
 
@@ -374,8 +383,19 @@ def build_driver(chrome_path=None, driver_path=None):
     if driver_path is None:
         raise FileNotFoundError('chromedriver tidak ditemukan.')
 
+    # Configure service with longer timeout for large file uploads
     service = Service(driver_path)
-    return webdriver.Chrome(service=service, options=options)
+    
+    # Create driver with custom timeout settings
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    # Set script timeout to handle long uploads (1 hour max)
+    driver.set_script_timeout(3600)
+    
+    # Set implicit wait
+    driver.implicitly_wait(30)
+    
+    return driver
 
 
 def verify_file(file_path: Path):
@@ -461,6 +481,21 @@ def convert_to_direct_link(desu_link: str) -> str:
         return f"https://i.desu.si/{code}.mp4"
 
     return desu_link
+
+
+def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=2):
+    """Execute JavaScript with retry logic to handle timeout."""
+    for attempt in range(max_retries):
+        try:
+            return driver.execute_script(script, *args)
+        except Exception as exc:
+            if 'timeout' in str(exc).lower() or 'read timed out' in str(exc).lower():
+                if attempt < max_retries - 1:
+                    logging.warning('Script execution timeout (attempt %d/%d), retrying in %d seconds...', attempt + 1, max_retries, retry_delay)
+                    time.sleep(retry_delay)
+                    continue
+            raise
+    return None
 
 
 def upload_via_browser(file_path: str) -> str | None:
@@ -599,103 +634,131 @@ def upload_via_browser(file_path: str) -> str | None:
             # Try to submit the form directly using JavaScript
             try:
                 # Find the form containing the file input
-                form = driver.execute_script('return arguments[0].form;', file_input)
+                form = execute_script_with_retry(driver, 'return arguments[0].form;', file_input, max_retries=3)
                 if form:
-                    driver.execute_script('arguments[0].submit();', form)
+                    execute_script_with_retry(driver, 'arguments[0].submit();', form, max_retries=3)
                     logging.info('Form submitted using JavaScript.')
                 else:
                     # Try clicking the button with JavaScript anyway
-                    driver.execute_script('arguments[0].scrollIntoView(true);', submit_button)
-                    driver.execute_script('arguments[0].removeAttribute("disabled");', submit_button)
-                    driver.execute_script('arguments[0].click();', submit_button)
+                    execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=2)
+                    execute_script_with_retry(driver, 'arguments[0].removeAttribute("disabled");', submit_button, max_retries=2)
+                    execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=3)
                     logging.info('Submit button diklik menggunakan JavaScript (force).')
             except Exception as exc:
                 logging.error('Force submit gagal: %s', exc)
-                return None
+                logging.warning('Continuing anyway as upload might still be in progress...')
         else:
             # Button is enabled, click normally
             try:
-                driver.execute_script('arguments[0].scrollIntoView(true);', submit_button)
-                driver.execute_script('arguments[0].click();', submit_button)
+                execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=2)
+                execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=3)
                 logging.info('Submit button diklik menggunakan JavaScript.')
             except Exception as exc:
                 logging.error('Normal submit click gagal: %s', exc)
-                return None
+                logging.warning('Continuing anyway as upload might still be in progress...')
 
         logging.info('Upload dimulai, menunggu hasil...')
         time.sleep(10)  # Longer initial wait for upload to start
 
         # Wait for upload completion - check for link or success message
-        wait = WebDriverWait(driver, 3600)
+        # For large files, use infinite wait as upload can take hours
+        max_wait_seconds = 86400  # 24 hours max
+        start_time = time.time()
+        check_interval = 5  # Check every 5 seconds instead of relying on WebDriver
 
-        def upload_complete(browser):
-            page = browser.page_source.lower()
-            url = browser.current_url.lower()
+        def check_upload_complete():
+            try:
+                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2)
+                if not page:
+                    return False, None
+                    
+                page_lower = page.lower()
+                url = driver.current_url.lower()
 
-            # Check for desu.si link in page or URL
-            if extract_link_from_html(page):
-                return True
-            if 'desu.si/' in url and url != UPLOAD_URL.lower():
-                logging.info('Redirect detected to: %s', url)
-                return True
+                # Check for desu.si link in page or URL
+                link = extract_link_from_html(page)
+                if link:
+                    return True, link
 
-            # Check for common success/error indicators
-            success_indicators = ['success', 'berhasil', 'complete', 'finished', 'uploaded', 'upload complete']
-            error_indicators = ['error', 'failed', 'gagal', 'invalid', 'too large', 'file size']
+                if 'desu.si/' in url and url != UPLOAD_URL.lower():
+                    logging.info('Redirect detected to: %s', url)
+                    # Try extract from URL
+                    url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', url)
+                    if url_match:
+                        return True, f"https://desu.si/{url_match.group(1)}"
+                    return True, url
 
-            for indicator in success_indicators:
-                if indicator in page:
-                    logging.info('Detected success indicator: %s', indicator)
-                    return True
+                # Check for success indicators
+                success_indicators = ['success', 'berhasil', 'complete', 'finished', 'uploaded', 'done']
+                for indicator in success_indicators:
+                    if indicator in page_lower:
+                        logging.info('Detected success indicator: %s', indicator)
+                        return True, None
 
-            for indicator in error_indicators:
-                if indicator in page:
-                    logging.warning('Detected error indicator: %s', indicator)
-                    return True  # Stop waiting, but upload failed
+                # Check for error indicators
+                error_indicators = ['error', 'failed', 'gagal', 'invalid', 'too large', 'file size exceeded']
+                for indicator in error_indicators:
+                    if indicator in page_lower:
+                        logging.warning('Detected error indicator: %s', indicator)
+                        return True, None
 
-            # Check if we're still on upload page (upload might be in progress)
-            if 'upload' in page and 'file' in page:
-                return False  # Still uploading
+                return False, None
+            except Exception as exc:
+                logging.debug('Error checking upload status: %s', exc)
+                return False, None
 
-            return False
+        link = None
+        while time.time() - start_time < max_wait_seconds:
+            try:
+                is_complete, found_link = check_upload_complete()
+                if is_complete:
+                    link = found_link
+                    break
+                
+                elapsed = int(time.time() - start_time)
+                logging.debug('Upload in progress... (elapsed: %d seconds)', elapsed)
+                time.sleep(check_interval)
+            except Exception as exc:
+                logging.debug('Error during upload monitoring: %s', exc)
+                time.sleep(check_interval)
 
-        try:
-            wait.until(upload_complete)
-        except Exception as exc:
-            logging.warning('Timeout menunggu upload selesai: %s', exc)
-
-        # Additional wait and final check
-        time.sleep(5)
-        page_source = driver.page_source
-        current_url = driver.current_url
-
-        link = extract_link_from_html(page_source)
+        if time.time() - start_time >= max_wait_seconds:
+            logging.warning('Upload wait timeout setelah 24 jam.')
 
         if link:
             logging.info('Upload berhasil, link ditemukan: %s', link)
             return convert_to_direct_link(link)
-        elif current_url != UPLOAD_URL:
-            # Check if redirected to a result page
-            logging.info('Redirect ke halaman hasil: %s', current_url)
-            if 'desu.si' in current_url:
-                # Try to extract link from URL or page
-                url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', current_url)
-                if url_match:
-                    link = f"https://desu.si/{url_match.group(1)}"
-                    logging.info('Link extracted from URL: %s', link)
-                    return convert_to_direct_link(link)
-                # Reload page to get final content
-                driver.refresh()
-                time.sleep(3)
-                page_source = driver.page_source
-                link = extract_link_from_html(page_source)
-                if link:
-                    return convert_to_direct_link(link)
-        else:
+
+        # If no link found yet, try to get current page state
+        try:
+            current_url = driver.current_url.lower()
+            page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2)
+            
+            if not page_source:
+                page_source = ''
+                
+            # Check if redirected
+            if current_url != UPLOAD_URL.lower():
+                logging.info('Current URL: %s', current_url)
+                if 'desu.si' in current_url:
+                    url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', current_url)
+                    if url_match:
+                        link = f"https://desu.si/{url_match.group(1)}"
+                        logging.info('Link extracted from URL: %s', link)
+                        return convert_to_direct_link(link)
+            
+            # Try one more time to find link in page
+            link = extract_link_from_html(page_source)
+            if link:
+                return convert_to_direct_link(link)
+                
             logging.error('Upload selesai tapi link tidak ditemukan.')
             logging.debug('Final URL: %s', current_url)
-            logging.debug('Final page source snippet: %s', page_source[:1500])
-            return None
+            logging.debug('Final page source snippet: %s', page_source[:1000] if page_source else 'empty')
+        except Exception as exc:
+            logging.debug('Error getting final page state: %s', exc)
+
+        return None
 
     except Exception as exc:
         logging.error('Upload browser gagal: %s', exc)
