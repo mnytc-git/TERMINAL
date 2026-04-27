@@ -439,32 +439,30 @@ def check_google_drive() -> bool:
 
 
 def extract_link_from_html(html: str) -> str | None:
-    """Extract desu.si link from HTML content with multiple patterns."""
-    # Pattern 1: Standard desu.si link
-    match = re.search(r'https?://desu\.si/[A-Za-z0-9]+', html)
-    if match:
-        return match.group(0)
+    """Extract desu.si link from HTML content with optimized patterns."""
+    if not html:
+        return None
 
-    # Pattern 2: Link without protocol
-    match = re.search(r'desu\.si/[A-Za-z0-9]+', html)
-    if match:
-        return f"https://{match.group(0)}"
+    # Combined regex patterns for efficiency - try most common first
+    patterns = [
+        r'https?://desu\.si/[A-Za-z0-9]+',  # Direct HTTPS link
+        r'desu\.si/[A-Za-z0-9]+',  # Domain + path
+        r'(?:href|src)=["\']([^"\']*desu\.si/[^"\']*)["\']',  # href/src attributes
+        r'["\']([^"\']*desu\.si/[^"\']*)["\']',  # Any quoted desu.si link
+    ]
 
-    # Pattern 3: Link in quotes or attributes
-    match = re.search(r'["\']([^"\']*desu\.si/[^"\']*)["\']', html)
-    if match:
-        link = match.group(1)
-        if not link.startswith('http'):
-            link = f"https://{link}"
-        return link
+    for pattern in patterns:
+        match = re.search(pattern, html, re.IGNORECASE)
+        if match:
+            link = match.group(0) if pattern.startswith('https?') else match.group(1) if '(' in pattern else match.group(0)
 
-    # Pattern 4: Link in href or src attributes
-    match = re.search(r'(?:href|src)=["\']([^"\']*desu\.si/[^"\']*)["\']', html)
-    if match:
-        link = match.group(1)
-        if not link.startswith('http'):
-            link = f"https://{link}"
-        return link
+            # Ensure proper protocol
+            if not link.startswith('http'):
+                link = f"https://{link}"
+
+            # Validate format
+            if re.match(r'https?://desu\.si/[A-Za-z0-9]+', link):
+                return link
 
     return None
 
@@ -675,9 +673,9 @@ def upload_via_browser(file_path: str) -> str | None:
                 logging.info('Continuing to monitor upload progress...')
 
         logging.info('Upload dimulai, menunggu hasil...')
-        time.sleep(3)  # Reduced from 10s to 3s - upload starts immediately
+        time.sleep(1)  # Reduced from 3s to 1s - upload starts immediately
         start_time = time.time()
-        check_interval = 2  # Reduced from 5s to 2s for faster detection
+        check_interval = 1  # Reduced from 2s to 1s for faster detection
 
         # Wait for upload completion - check for link or success message
         # For large files, use infinite wait as upload can take hours
@@ -685,8 +683,8 @@ def upload_via_browser(file_path: str) -> str | None:
 
         def check_upload_complete():
             try:
-                # Get page content and URL
-                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.5)
+                # Get page content and URL - optimized for speed
+                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.2)
                 if not page:
                     return False, None
 
@@ -714,11 +712,10 @@ def upload_via_browser(file_path: str) -> str | None:
                         return True, link
                     return True, url
 
-                # Check for success indicators in page content
+                # Check for success indicators in page content - optimized
                 success_indicators = [
                     'upload successful', 'upload complete', 'file uploaded',
-                    'success', 'berhasil', 'complete', 'finished', 'uploaded', 'done',
-                    'your file has been uploaded', 'upload finished'
+                    'success', 'berhasil', 'complete', 'finished', 'uploaded', 'done'
                 ]
                 for indicator in success_indicators:
                     if indicator in page_lower:
@@ -727,48 +724,24 @@ def upload_via_browser(file_path: str) -> str | None:
                         link = extract_link_from_html(page)
                         if link:
                             return True, link
-                        # If no link found but success detected, continue checking
                         break
 
-                # Check for error indicators
-                error_indicators = [
-                    'error', 'failed', 'gagal', 'invalid', 'too large',
-                    'file size exceeded', 'upload failed', 'file rejected'
-                ]
+                # Check for error indicators - optimized
+                error_indicators = ['error', 'failed', 'gagal', 'invalid', 'too large', 'file size exceeded']
                 for indicator in error_indicators:
                     if indicator in page_lower:
                         logging.warning('Detected error indicator: "%s"', indicator)
-                        return True, None  # Stop waiting, upload failed
+                        return True, None
 
-                # Check if we're still on upload page (upload might be in progress)
-                # Look for upload progress indicators or form elements
-                upload_indicators = [
-                    'input type="file"', 'name="files[]"', 'upload', 'uploading',
-                    'progress', 'progressbar', 'file upload', 'select file'
-                ]
+                # Quick check if we're still on upload page
+                if 'input type="file"' in page_lower or 'name="files[]"' in page_lower:
+                    return False, None  # Still uploading
 
-                is_still_uploading = False
-                for indicator in upload_indicators:
-                    if indicator in page_lower:
-                        is_still_uploading = True
-                        break
-
-                # If no upload indicators found, page has likely changed to result page
-                if not is_still_uploading:
-                    logging.info('Upload page no longer detected, checking for result...')
-                    # Try to find any link as this might be a result page
-                    link = extract_link_from_html(page)
-                    if link:
-                        logging.info('Found result link after upload page disappeared.')
-                        return True, link
-                    # If no link but page changed, assume success and continue checking
-                    return False, None
-
-                # If we reach here, page has changed but no clear success/error
-                # This might be a result page, try to extract any link
-                link = extract_link_from_html(page)
-                if link:
-                    logging.info('Found link in result page.')
+                # If page changed but no clear indicators, check for any desu.si URL
+                desu_urls = re.findall(r'https?://[^\s<>"\']*desu\.si[^\s<>"\']*', page)
+                if desu_urls:
+                    link = desu_urls[0]
+                    logging.info('Found desu.si URL in changed page: %s', link)
                     return True, link
 
                 return False, None
@@ -790,8 +763,8 @@ def upload_via_browser(file_path: str) -> str | None:
                 check_count += 1
                 elapsed = int(time.time() - start_time)
 
-                # Log progress every 30 seconds or every 10 checks
-                if elapsed - last_progress_log >= 30 or check_count % 10 == 0:
+                # Log progress every 15 seconds or every 5 checks - more frequent feedback
+                if elapsed - last_progress_log >= 15 or check_count % 5 == 0:
                     logging.info('Upload in progress... (elapsed: %d seconds, checks: %d)', elapsed, check_count)
                     last_progress_log = elapsed
 
@@ -809,15 +782,15 @@ def upload_via_browser(file_path: str) -> str | None:
 
         # If no link found yet, try to get current page state with multiple attempts
         logging.info('Performing final link extraction checks...')
-        for attempt in range(3):
+        for attempt in range(2):  # Reduced from 3 to 2 attempts
             try:
                 # Try to refresh page to get final state
                 if attempt > 0:
                     driver.refresh()
-                    time.sleep(2)
+                    time.sleep(1)  # Reduced from 2s to 1s
 
                 current_url = driver.current_url.lower()
-                page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2, retry_delay=0.5)
+                page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.2)
 
                 if not page_source:
                     continue
@@ -847,7 +820,7 @@ def upload_via_browser(file_path: str) -> str | None:
 
             except Exception as exc:
                 logging.debug('Error in final link extraction (attempt %d): %s', attempt + 1, exc)
-                time.sleep(1)
+                time.sleep(0.5)  # Reduced delay
 
         logging.error('Upload selesai tapi link tidak ditemukan setelah semua percobaan.')
         logging.debug('Final URL: %s', current_url if 'current_url' in locals() else 'unknown')
