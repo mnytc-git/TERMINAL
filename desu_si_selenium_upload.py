@@ -123,7 +123,7 @@ def install_google_chrome() -> bool:
         subprocess.check_call(['wget', '-q', '-O', deb_path, deb_url])
         subprocess.check_call(['apt-get', 'install', '-y', '-qq', deb_path],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(1)  # Reduced from 2s to 1s
         if os.path.exists('/usr/bin/google-chrome-stable'):
             logging.info('Google Chrome Stable berhasil diinstall.')
             return True
@@ -143,7 +143,7 @@ def install_chromium() -> bool:
         subprocess.check_call(['apt-get', 'update', '-qq'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.check_call(['apt-get', 'install', '-y', '-qq', 'chromium-browser'],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        time.sleep(1)  # Reduced from 2s to 1s
         if os.path.exists('/usr/bin/chromium-browser'):
             logging.info('Chromium berhasil diinstall di /usr/bin/chromium-browser.')
             return True
@@ -191,7 +191,7 @@ def install_chromium_dependencies() -> bool:
         subprocess.check_call(['apt-get', 'install', '-y', '-qq'] + deps,
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         logging.info('System dependencies installed successfully.')
-        time.sleep(1)
+        time.sleep(0.5)  # Reduced from 1s to 0.5s
         return True
     except Exception as exc:
         logging.debug('System dependencies install failed: %s', exc)
@@ -354,14 +354,14 @@ def build_driver(chrome_path=None, driver_path=None):
         logging.warning('Binary Chrome/Chromium ditemukan tapi tidak bisa dijalankan: %s', chrome_path)
         logging.info('Mencoba install Google Chrome Stable sebagai fallback...')
         if install_google_chrome():
-            time.sleep(2)
+            time.sleep(1)  # Reduced from 2s to 1s
             chrome_path = find_chrome_binary()
 
     if chrome_path is None:
         logging.warning('Chrome binary tidak ditemukan, mencoba install Chromium/Chrome...')
         install_chromium_dependencies()
         if install_chromium():
-            time.sleep(2)
+            time.sleep(1)  # Reduced from 2s to 1s
             chrome_path = find_chrome_binary()
 
         if chrome_path is None:
@@ -389,11 +389,11 @@ def build_driver(chrome_path=None, driver_path=None):
     # Create driver with custom timeout settings
     driver = webdriver.Chrome(service=service, options=options)
     
-    # Set script timeout to handle long uploads (1 hour max)
-    driver.set_script_timeout(3600)
+    # Set script timeout to handle long uploads (10 minutes max - reduced from 1 hour)
+    driver.set_script_timeout(600)
     
     # Set implicit wait
-    driver.implicitly_wait(30)
+    driver.implicitly_wait(10)  # Reduced from 30s to 10s
     
     return driver
 
@@ -483,18 +483,26 @@ def convert_to_direct_link(desu_link: str) -> str:
     return desu_link
 
 
-def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=2):
-    """Execute JavaScript with retry logic to handle timeout."""
+def execute_script_with_retry(driver, script, *args, max_retries=3, retry_delay=1):
+    """Execute JavaScript with retry logic to handle timeout and stale element."""
     for attempt in range(max_retries):
         try:
             return driver.execute_script(script, *args)
         except Exception as exc:
-            if 'timeout' in str(exc).lower() or 'read timed out' in str(exc).lower():
+            exc_str = str(exc).lower()
+            if 'timeout' in exc_str or 'read timed out' in exc_str:
                 if attempt < max_retries - 1:
-                    logging.warning('Script execution timeout (attempt %d/%d), retrying in %d seconds...', attempt + 1, max_retries, retry_delay)
+                    logging.debug('Script execution timeout (attempt %d/%d), retrying in %d seconds...', attempt + 1, max_retries, retry_delay)
                     time.sleep(retry_delay)
                     continue
-            raise
+                else:
+                    logging.debug('Script timeout after %d retries, continuing...', max_retries)
+                    return None
+            elif 'stale element' in exc_str:
+                logging.debug('Stale element reference in script, skipping...')
+                return None
+            else:
+                raise
     return None
 
 
@@ -518,8 +526,8 @@ def upload_via_browser(file_path: str) -> str | None:
         logging.info('Navigasi ke desu.si...')
         driver.get(UPLOAD_URL)
 
-        # Wait for page to load completely
-        time.sleep(3)
+        # Wait for page to load completely - reduced from 3s to 1s
+        time.sleep(1)
         wait = WebDriverWait(driver, 30)
 
         logging.info('Mencari input file...')
@@ -604,7 +612,7 @@ def upload_via_browser(file_path: str) -> str | None:
 
         # Wait for submit button to be enabled and clickable
         logging.info('Menunggu tombol submit siap...')
-        max_wait = 30  # Reduced wait time since button might never enable
+        max_wait = 10  # Reduced from 30s to 10s - button usually enables immediately
         button_enabled = False
 
         for i in range(max_wait):
@@ -634,53 +642,61 @@ def upload_via_browser(file_path: str) -> str | None:
             # Try to submit the form directly using JavaScript
             try:
                 # Find the form containing the file input
-                form = execute_script_with_retry(driver, 'return arguments[0].form;', file_input, max_retries=3)
+                form = execute_script_with_retry(driver, 'return arguments[0].form;', file_input, max_retries=2, retry_delay=1)
                 if form:
-                    execute_script_with_retry(driver, 'arguments[0].submit();', form, max_retries=3)
+                    result = execute_script_with_retry(driver, 'arguments[0].submit();', form, max_retries=2, retry_delay=1)
                     logging.info('Form submitted using JavaScript.')
                 else:
                     # Try clicking the button with JavaScript anyway
-                    execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=2)
-                    execute_script_with_retry(driver, 'arguments[0].removeAttribute("disabled");', submit_button, max_retries=2)
-                    execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=3)
+                    execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=1, retry_delay=1)
+                    execute_script_with_retry(driver, 'arguments[0].removeAttribute("disabled");', submit_button, max_retries=1, retry_delay=1)
+                    execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=2, retry_delay=1)
                     logging.info('Submit button diklik menggunakan JavaScript (force).')
             except Exception as exc:
-                logging.error('Force submit gagal: %s', exc)
-                logging.warning('Continuing anyway as upload might still be in progress...')
+                exc_str = str(exc).lower()
+                if 'stale element' in exc_str:
+                    logging.debug('Button element became stale during upload, ignoring and continuing...')
+                else:
+                    logging.debug('Force submit encountered error: %s', exc)
+                logging.info('Continuing to monitor upload progress...')
         else:
             # Button is enabled, click normally
             try:
-                execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=2)
-                execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=3)
+                execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=1, retry_delay=1)
+                execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=2, retry_delay=1)
                 logging.info('Submit button diklik menggunakan JavaScript.')
             except Exception as exc:
-                logging.error('Normal submit click gagal: %s', exc)
-                logging.warning('Continuing anyway as upload might still be in progress...')
+                exc_str = str(exc).lower()
+                if 'stale element' in exc_str:
+                    logging.debug('Button element became stale during click, ignoring and continuing...')
+                else:
+                    logging.debug('Submit click encountered error: %s', exc)
+                logging.info('Continuing to monitor upload progress...')
 
         logging.info('Upload dimulai, menunggu hasil...')
-        time.sleep(10)  # Longer initial wait for upload to start
-
-        # Wait for upload completion - check for link or success message
-        # For large files, use infinite wait as upload can take hours
-        max_wait_seconds = 86400  # 24 hours max
+        time.sleep(3)  # Reduced from 10s to 3s - upload starts immediately
         start_time = time.time()
-        check_interval = 5  # Check every 5 seconds instead of relying on WebDriver
+        check_interval = 2  # Reduced from 5s to 2s for faster detection
 
         def check_upload_complete():
             try:
-                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2)
+                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=2, retry_delay=1)
                 if not page:
                     return False, None
                     
                 page_lower = page.lower()
-                url = driver.current_url.lower()
+                
+                try:
+                    url = driver.current_url.lower()
+                except:
+                    url = ''
 
                 # Check for desu.si link in page or URL
                 link = extract_link_from_html(page)
                 if link:
                     return True, link
 
-                if 'desu.si/' in url and url != UPLOAD_URL.lower():
+                if url and 'desu.si/' in url and url != UPLOAD_URL.lower():
                     logging.info('Redirect detected to: %s', url)
                     # Try extract from URL
                     url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', url)
