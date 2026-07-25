@@ -65,8 +65,6 @@ if [[ $- == *i* ]]; then
         echo "🌐 Menginstall Tor & Proxychains..."
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt update > /dev/null 2>&1
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt install -y tor proxychains4 > /dev/null 2>&1
-        # Mengaktifkan quiet_mode agar log proxychains tidak muncul
-        docker exec $KALI_NAME sed -i 's/#quiet_mode/quiet_mode/g' /etc/proxychains4.conf
     fi
 
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
@@ -75,6 +73,10 @@ if [[ $- == *i* ]]; then
         docker exec $KALI_NAME bash -c "echo 'source /kali/myenv/bin/activate' >> /root/.bashrc"
         # Custom branding Government Bang
         docker exec $KALI_NAME bash -c "echo \"fastfetch | sed 's/Google Compute Engine/Government Bang/g'\" >> /root/.bashrc"
+        
+        # Sembunyikan banner proxychains secara total via fungsi bash wrapper
+        docker exec $KALI_NAME bash -c "echo 'function proxychains4() { command proxychains4 \"\$@\" 2>/dev/null; }' >> /root/.bashrc"
+        docker exec $KALI_NAME bash -c "export -f proxychains4"
     fi
 
     echo -ne "\033]0;Bang\007"
