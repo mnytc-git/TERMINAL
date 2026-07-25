@@ -62,6 +62,9 @@ if [[ $- == *i* ]]; then
     if ! docker exec $KALI_NAME test -d /kali/myenv; then
         echo "🐍 Membuat Python Venv..."
         docker exec $KALI_NAME python3 -m venv /kali/myenv
+        echo "🌐 Menginstall Tor & Proxychains..."
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt update > /dev/null 2>&1
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt install -y tor proxychains4 > /dev/null 2>&1
     fi
 
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
