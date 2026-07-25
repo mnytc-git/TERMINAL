@@ -65,6 +65,8 @@ if [[ $- == *i* ]]; then
         echo "🌐 Menginstall Tor & Proxychains..."
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt update > /dev/null 2>&1
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt install -y tor proxychains4 > /dev/null 2>&1
+        # Mengaktifkan quiet_mode agar log proxychains tidak muncul
+        docker exec $KALI_NAME sed -i 's/#quiet_mode/quiet_mode/g' /etc/proxychains4.conf
     fi
 
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
