@@ -36,34 +36,42 @@ if [[ $- == *i* ]]; then
     fi
 
     if ! docker exec $KALI_NAME test -f /root/.setup_basic_done; then
-        echo "⚙️  Setup dasar (Update & Venv)..."
+        echo "⚙️  Setup dasar (Fastfetch & Venv)..."
         docker exec $KALI_NAME apt update > /dev/null 2>&1
         docker exec $KALI_NAME apt install -y fastfetch python3-venv > /dev/null 2>&1
         docker exec $KALI_NAME touch /root/.setup_basic_done
     fi
 
-    if ! docker exec $KALI_NAME test -f /root/.full_tools_installed; then
-        echo "======================================================"
-        echo "🚀 Mendeteksi instalasi pertama..."
-        echo "📦 Sedang menginstall Tools Hacking..."
-        echo "======================================================"
-
-        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME bash -c "apt update && apt install -y git sudo golang"
-        
-        if [ $? -eq 0 ]; then
-            docker exec $KALI_NAME touch /root/.full_tools_installed
-            echo "✅ Instalasi Selesai!"
-            sleep 2
-        else
-            echo "❌ Gagal install tools. Coba restart environment."
-        fi
-    fi
-
     if ! docker exec $KALI_NAME test -d /kali/myenv; then
-        echo "🌐 Menginstall Tor & Proxychains..."
+        echo "🌐 Mengaktifkan Tor & Proxychains (Instant Retry Mode)..."
         docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt update > /dev/null 2>&1
-        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt install -y tor proxychains4 > /dev/null 2>&1
+        docker exec -e DEBIAN_FRONTEND=noninteractive $KALI_NAME apt install -y tor proxychains4 netcat-openbsd > /dev/null 2>&1
         
+        # Konfigurasi Mutlak Tor Service & Auto-Reconnect Tanpa Jeda
+        docker exec $KALI_NAME bash -c "
+            /etc/init.d/tor stop >/dev/null 2>&1
+            pkill -f tor >/dev/null 2>&1
+            rm -rf /var/lib/tor/*
+            touch /var/lib/tor/tor.log
+            chown -R debian-tor:debian-tor /var/lib/tor
+            chmod 700 /var/lib/tor
+
+            echo 'SocksPort 127.0.0.1:9050' > /etc/tor/torrc
+            echo 'DataDirectory /var/lib/tor' >> /etc/tor/torrc
+            echo 'ClientUseIPv6 0' >> /etc/tor/torrc
+
+            /etc/init.d/tor start >/dev/null 2>&1
+        "
+
+        # Loop Instan Tanpa Waktu Tunggu Lama (Auto-Reconnect Sampai Nyala)
+        echo "🔄 Menghubungkan jalur Tor secara instan..."
+        docker exec $KALI_NAME bash -c "
+            while ! nc -z 127.0.0.1 9050; do
+                /etc/init.d/tor start >/dev/null 2>&1
+                sleep 0.2
+            done
+        "
+
         echo "🐍 Membuat Python Venv..."
         docker exec $KALI_NAME python3 -m venv /kali/myenv
     fi
@@ -71,12 +79,12 @@ if [[ $- == *i* ]]; then
     if ! docker exec $KALI_NAME grep -q "Government Bang" /root/.bashrc; then
         docker exec $KALI_NAME sed -i '/fastfetch/d' /root/.bashrc
         docker exec $KALI_NAME sed -i '/activate/d' /root/.bashrc
-        docker exec $KALI_NAME bash -c "echo 'source /kali/myenv/bin/activate' >> /root/.bashrc"
+        docker exec $KALI_NAME bash -c "echo 'source /kali/myenv/bin/activate' >> ~/.bashrc"
         # Custom branding Government Bang
-        docker exec $KALI_NAME bash -c "echo \"fastfetch | sed 's/Google Compute Engine/Government Bang/g'\" >> /root/.bashrc"
+        docker exec $KALI_NAME bash -c "echo \"fastfetch | sed 's/Google Compute Engine/Government Bang/g'\" >> ~/.bashrc"
         
         # Sembunyikan banner proxychains secara total via fungsi bash wrapper
-        docker exec $KALI_NAME bash -c "echo 'function proxychains4() { command proxychains4 \"\$@\" 2>/dev/null; }' >> /root/.bashrc"
+        docker exec $KALI_NAME bash -c "echo 'function proxychains4() { command proxychains4 \"\$@\" 2>/dev/null; }' >> ~/.bashrc"
         docker exec $KALI_NAME bash -c "export -f proxychains4"
     fi
 
