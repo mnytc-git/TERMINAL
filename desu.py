@@ -387,7 +387,9 @@ def build_driver(chrome_path=None, driver_path=None, headless=True):
     # Only enable headless mode if requested. WatchParty streaming requires a visible
     # browser/tab for WebRTC peer-to-peer connections, so callers can pass headless=False.
     if headless:
-        options.add_argument('--headless')
+        options.add_argument('--headless=new')
+        options.add_argument('--use-fake-ui-for-media-stream')
+        options.add_argument('--autoplay-policy=no-user-gesture-required')
 
     if chrome_path:
         logging.info(f'Menggunakan Chrome binary: {chrome_path}')
@@ -865,7 +867,7 @@ def stream_to_watchparty(file_path: str) -> None:
     driver = None
     try:
         try:
-            driver = build_driver(headless=False)
+            driver = build_driver(headless=True)
         except Exception as exc:
             logging.error('Gagal membuat WebDriver untuk WatchParty: %s', exc)
             return None
@@ -878,53 +880,86 @@ def stream_to_watchparty(file_path: str) -> None:
         wait = WebDriverWait(driver, 30)
         time.sleep(1)
 
-        logging.info('Mencari input file tersembunyi di halaman WatchParty...')
-        file_input = None
-        selectors = [
-            (By.CSS_SELECTOR, 'input[type="file"]'),
-            (By.XPATH, '//input[@type="file"]'),
-        ]
-
-        for selector in selectors:
-            try:
-                file_input = wait.until(EC.presence_of_element_located(selector))
-                logging.info('Found file input with selector: %s', selector)
-                break
-            except Exception:
-                continue
-
-        if file_input is None:
-            # Try a last-resort JS query
-            try:
-                file_input = driver.execute_script("return document.querySelector('input[type=file]');")
-            except Exception:
-                file_input = None
-
-        if file_input is None:
-            logging.error('File input tidak ditemukan di WatchParty.')
-            logging.debug('Page source snippet: %s', driver.page_source[:1000])
-            return None
-
-        # Make the hidden input visible and interactable
+        logging.info('Menerapkan Bypass FilePicker tingkat mendalam...')
         try:
-            driver.execute_script('arguments[0].style.display = "block"; arguments[0].style.visibility = "visible"; arguments[0].style.opacity = "1"; arguments[0].removeAttribute("hidden");', file_input)
-            driver.execute_script('arguments[0].scrollIntoView(true);', file_input)
-            try:
-                wait.until(EC.element_to_be_clickable(file_input))
-            except Exception:
-                logging.warning('Element tidak clickable, melanjutkan dengan send_keys...')
-        except Exception as exc:
-            logging.debug('Gagal membuat input terlihat: %s', exc)
+            # 1. Matikan API File System modern & Cegat elemen <input> dari memori
+            driver.execute_script("""
+                delete window.showOpenFilePicker;
+                
+                function attachToDOM(target) {
+                    if (target.id === 'wp-captured-input') return;
+                    target.id = 'wp-captured-input';
+                    target.style.display = 'block';
+                    target.style.position = 'fixed';
+                    target.style.top = '0';
+                    target.style.left = '0';
+                    target.style.zIndex = '999999';
+                    target.style.opacity = '0.01';
+                    document.body.appendChild(target);
+                }
 
-        logging.info('Mengirim file path ke input WatchParty...')
-        try:
+                const originalCreateElement = document.createElement.bind(document);
+                document.createElement = function(tagName) {
+                    const el = originalCreateElement(tagName);
+                    if (tagName.toLowerCase() === 'input') {
+                        const originalSetAttribute = el.setAttribute.bind(el);
+                        el.setAttribute = function(name, value) {
+                            originalSetAttribute(name, value);
+                            if (name === 'type' && value === 'file') attachToDOM(el);
+                        };
+                        return new Proxy(el, {
+                            set(target, prop, value) {
+                                target[prop] = value;
+                                if (prop === 'type' && value === 'file') attachToDOM(target);
+                                return true;
+                            }
+                        });
+                    }
+                    return el;
+                };
+            """)
+            
+            # 2. Klik tombol UI untuk memicu pembuatan input file
+            driver.execute_script("""
+                const btns = Array.from(document.querySelectorAll('button'));
+                const joinBtn = btns.find(b => b.textContent.includes('Join'));
+                if (joinBtn) joinBtn.click();
+            """)
+            time.sleep(1)
+            
+            driver.execute_script("""
+                const elements = Array.from(document.querySelectorAll('*'));
+                const fileBtn = elements.find(el => el.textContent.trim() === 'File' && el.tagName !== 'SCRIPT');
+                if (fileBtn) fileBtn.click();
+            """)
+            time.sleep(1.5)
+            
+            driver.execute_script("""
+                const btns = Array.from(document.querySelectorAll('button'));
+                const startBtn = btns.find(b => b.textContent.includes('Start Fileshare'));
+                if (startBtn) startBtn.click();
+            """)
+            
+            # 3. Tunggu elemen hasil tangkapan Proxy muncul di DOM
+            logging.info('Menunggu tangkapan input file tersembunyi...')
+            file_input = wait.until(EC.presence_of_element_located((By.ID, 'wp-captured-input')))
+            
+            logging.info('Menyuntikkan video ke WatchParty...')
             file_input.send_keys(file_path)
-            # Trigger change events
+            
+            # 4. Picu event agar WatchParty memproses filenya
             driver.execute_script('arguments[0].dispatchEvent(new Event("change", { bubbles: true }));', file_input)
-            driver.execute_script('arguments[0].dispatchEvent(new Event("input", { bubbles: true }));', file_input)
-            logging.info('File path dikirim ke input.')
+            logging.info('File berhasil disuntikkan! Video akan segera diputar.')
+            
+            # Tutup modal setelah selesai
+            driver.execute_script("""
+                const closeBtn = document.querySelector('.mantine-Modal-close');
+                if (closeBtn) closeBtn.click();
+            """)
+            
         except Exception as exc:
-            logging.error('Gagal mengirim file path ke input: %s', exc)
+            logging.error('Gagal melakukan bypass mendalam: %s', exc)
+            return None
 
         logging.info('Menjaga browser tetap terbuka untuk menjaga koneksi WatchParty...')
         # Keep the browser open indefinitely to maintain the WatchParty connection.
