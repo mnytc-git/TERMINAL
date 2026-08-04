@@ -39,6 +39,18 @@ except:
     pass
 
 try:
+    import requests
+except ImportError:
+    logging.warning("requests belum terpasang. Install dengan: pip install requests")
+    requests = None
+
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    logging.warning("beautifulsoup4 belum terpasang. Install dengan: pip install beautifulsoup4")
+    BeautifulSoup = None
+
+try:
     from webdriver_manager.chrome import ChromeDriverManager
 except ImportError:
     ChromeDriverManager = None
@@ -839,6 +851,242 @@ def upload_via_browser(file_path: str) -> str | None:
             driver.quit()
 
 
+
+
+def search_movie_and_generate_download_link():
+    """
+    Search for movies on LK21 and generate a download link.
+    
+    Steps:
+    1. Prompt user for search keyword
+    2. Scrape LK21 search results
+    3. Display results as numbered list
+    4. Prompt user to select a movie
+    5. Extract movie slug from URL
+    6. Construct download URL using dl.lk21.party/get/ domain
+    7. Print final download link
+    """
+    
+    # Check if required libraries are installed
+    if requests is None:
+        print("❌ Perpustakaan 'requests' tidak tersedia. Install dengan: pip install requests")
+        return
+    if BeautifulSoup is None:
+        print("❌ Perpustakaan 'beautifulsoup4' tidak tersedia. Install dengan: pip install beautifulsoup4")
+        return
+    
+    BASE_DOMAIN = "https://tv10.lk21official.cc"
+    DOWNLOAD_DOMAIN = "https://dl.lk21.party/get"
+    
+    # Set a timeout for requests
+    REQUEST_TIMEOUT = 10
+    
+    # User-Agent to avoid blocking
+    HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+    
+    try:
+        # Step 1: Prompt user for search keyword
+        print("\n" + "="*50)
+        print("🎬 MOVIE SEARCH & DOWNLOAD LINK GENERATOR")
+        print("="*50)
+        
+        keyword = input("\n👉 Masukkan keyword pencarian (contoh: ninja): ").strip()
+        
+        if not keyword:
+            print("❌ Keyword tidak boleh kosong!")
+            return
+        
+        # Step 2: Load LK21 search page using Selenium WebDriver
+        print(f"\n🔍 Mencari film dengan keyword '{keyword}'...")
+        
+        driver = None
+        page_source = None
+        try:
+            search_urls = [
+                f"{BASE_DOMAIN}/?s={keyword}",
+                f"{BASE_DOMAIN}/search/{keyword}",
+            ]
+
+            try:
+                driver = build_driver()
+            except Exception as e:
+                print(f"❌ Gagal membuat browser untuk pencarian: {e}")
+                return
+
+            for search_url in search_urls:
+                try:
+                    logging.debug(f"Mencoba URL: {search_url}")
+                    driver.get(search_url)
+                    time.sleep(10)
+                    logging.info(f"Page Title: {driver.title}")
+                    if 'Just a moment' in driver.title:
+                        logging.info('Cloudflare masih memeriksa, menunggu 5 detik lagi...')
+                        time.sleep(5)
+                    page_source = driver.page_source
+                    if page_source and len(page_source) > 100:
+                        logging.info(f"Berhasil mengakses: {search_url}")
+                        break
+                except Exception as e:
+                    logging.debug(f"Gagal mengakses {search_url}: {e}")
+                    page_source = None
+                    continue
+
+            if not page_source:
+                print("❌ Gagal mengakses LK21 melalui browser. Pastikan URL dan koneksi internet sudah benar.")
+                return
+        finally:
+            if driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+        # Step 3: Parse HTML to extract movies
+        try:
+            soup = BeautifulSoup(page_source, 'html.parser')
+            
+            # Try multiple selectors for movie entries
+            # Common selectors: .post-item, .item-series, article, .film-item, .movie-item
+            movie_selectors = [
+                'article',
+                '.post-item',
+                '.item-series',
+                '.film-item',
+                '.movie-item',
+                '.box-item',
+            ]
+            
+            movies = []
+            for selector in movie_selectors:
+                articles = soup.select(selector)
+                if articles:
+                    logging.info(f"Ditemukan {len(articles)} artikel dengan selector '{selector}'")
+                    
+                    for article in articles:
+                        # Try to find title and link
+                        title_elem = article.find('h2') or article.find('h3') or article.find('a')
+                        if not title_elem:
+                            continue
+                        
+                        link_elem = article.find('a', href=True)
+                        if not link_elem or not link_elem.get('href'):
+                            continue
+                        
+                        title = title_elem.get_text(strip=True)
+                        link = link_elem['href']
+                        
+                        # Ensure absolute URL
+                        if link.startswith('/'):
+                            link = BASE_DOMAIN + link
+                        elif not link.startswith('http'):
+                            link = BASE_DOMAIN + '/' + link
+                        
+                        # Remove query parameters if present
+                        if '?' in link:
+                            link = link.split('?')[0]
+                        
+                        if title and link:
+                            movies.append({'title': title, 'url': link})
+                    
+                    if movies:
+                        break
+            
+            if not movies:
+                print("❌ Tidak ada film ditemukan untuk keyword tersebut.")
+                return
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_movies = []
+            for movie in movies:
+                if movie['url'] not in seen:
+                    seen.add(movie['url'])
+                    unique_movies.append(movie)
+            
+            movies = unique_movies[:50]  # Limit to 50 results
+            
+            if not movies:
+                print("❌ Tidak ada film unik ditemukan.")
+                return
+        
+        except Exception as e:
+            print(f"❌ Error saat parse HTML: {e}")
+            logging.debug(f"Page source length: {len(page_source) if page_source else 0}")
+            return
+        
+        # Step 4: Display movies as numbered list
+        print(f"\n✅ Ditemukan {len(movies)} hasil pencarian:\n")
+        for i, movie in enumerate(movies, start=1):
+            print(f"[{i}] {movie['title'][:70]}")  # Limit title length
+        
+        print("\n" + "-"*50)
+        
+        # Step 5: Prompt user to select a movie
+        while True:
+            try:
+                choice = input("\n👉 Pilih nomor film (1-{}) atau 0 untuk batal: ".format(len(movies)))
+                
+                if choice == '0':
+                    print("❌ Dibatalkan.")
+                    return
+                
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(movies):
+                    selected_movie = movies[choice_num - 1]
+                    break
+                else:
+                    print(f"❌ Nomor tidak valid. Pilih antara 1-{len(movies)}")
+            except ValueError:
+                print("❌ Input harus berupa angka!")
+        
+        print(f"\n✅ Film dipilih: {selected_movie['title']}")
+        movie_url = selected_movie['url']
+        logging.info(f"URL asli: {movie_url}")
+        
+        # Step 6: Extract movie slug from URL
+        # Extract the last path segment from the URL (remove trailing slashes)
+        movie_url_clean = movie_url.rstrip('/')
+        movie_slug = movie_url_clean.split('/')[-1]
+        
+        if not movie_slug:
+            print("❌ Gagal mengekstrak slug film dari URL.")
+            return
+        
+        # Remove common file extensions if present (shouldn't happen but just in case)
+        if '.' in movie_slug:
+            movie_slug = movie_slug.split('.')[0]
+        
+        logging.info(f"Extracted slug: {movie_slug}")
+        
+        # Step 7: Construct download URL
+        download_link = f"{DOWNLOAD_DOMAIN}/{movie_slug}"
+        
+        # Step 8: Print final download link
+        print("\n" + "="*50)
+        print("🎉 DOWNLOAD LINK BERHASIL DIBUAT!")
+        print("="*50)
+        print(f"\n🎬 Film: {selected_movie['title']}")
+        print(f"🔗 URL Asli: {movie_url}")
+        print(f"📥 Download Link: {download_link}")
+        print("\n" + "="*50)
+        
+        # Optional: Copy to clipboard (if on Google Colab or system with xclip)
+        try:
+            import subprocess
+            process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
+            process.communicate(download_link.encode('utf-8'))
+            print("✅ Download link disalin ke clipboard!")
+        except Exception:
+            logging.debug("Tidak dapat menyalin ke clipboard (xclip tidak tersedia)")
+    
+    except KeyboardInterrupt:
+        print("\n\n❌ Dibatalkan oleh pengguna.")
+    except Exception as e:
+        print(f"❌ Error yang tidak terduga: {e}")
+        logging.exception("Unexpected error in movie search function")
+
 def main():
     file_path: Path
     if len(sys.argv) == 1 or sys.argv[1] in ('--choose', '-c'):
@@ -858,9 +1106,31 @@ def main():
         print('\n' + '-' * 50)
         file_path = choose_file(mp4_files)
     elif len(sys.argv) == 2:
-        file_path = Path(sys.argv[1]).resolve()
+        if sys.argv[1] in ('--movie-search', '-m', '--search'):
+            search_movie_and_generate_download_link()
+            return
+        if sys.argv[1] in ('--search-upload', '-su'):
+            search_movie_and_generate_download_link()
+            input("\n⏳ Press Enter once you have clicked 'Google Share' and the movie has successfully appeared in your Google Drive...")
+            if not check_google_drive():
+                sys.exit(1)
+
+            mp4_files = search_mp4_files(SEARCH_DIR)
+            if not mp4_files:
+                logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
+                sys.exit(1)
+
+            print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
+            for i, path in enumerate(mp4_files, start=1):
+                size_mb = path.stat().st_size / (1024 * 1024)
+                print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
+
+            print('\n' + '-' * 50)
+            file_path = choose_file(mp4_files)
+        else:
+            file_path = Path(sys.argv[1]).resolve()
     else:
-        print('Usage: python desu_si_selenium_upload.py [--choose | /path/to/video.mp4]')
+        print('Usage: python desu_si_selenium_upload.py [--choose | --movie-search | --search-upload | /path/to/video.mp4]')
         sys.exit(1)
 
     try:
