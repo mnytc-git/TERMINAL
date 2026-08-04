@@ -1252,14 +1252,32 @@ def main():
         sys.exit(1)
 
     logging.info(f'File yang dipilih: {file_path}')
-    link = upload_via_browser(str(file_path))
-    if link:
-        direct_link = convert_to_direct_link(link)
-        print('\n🎉 UPLOAD BERHASIL!')
-        print(f'� Upload link: {link}')
-        print(f'📥 Direct download: {direct_link}')
-    else:
-        print('\n❌ Upload gagal. Pastikan ChromeDriver tersedia dan desu.si menerima upload dari browser.')
+
+    # Interactive menu: let user choose between uploading to desu.si or streaming to WatchParty
+    try:
+        while True:
+            print('\nMau diapain file ini?')
+            print('[1] Upload ke desu.si (untuk link download/hotlink)')
+            print('[2] Stream ke WatchParty (Peer-to-Peer)')
+            choice = input('👉 Masukkan pilihan (1/2): ').strip()
+            if choice == '1':
+                link = upload_via_browser(str(file_path))
+                if link:
+                    direct_link = convert_to_direct_link(link)
+                    print('\n🎉 UPLOAD BERHASIL!')
+                    print(f'Upload link: {link}')
+                    print(f'📥 Direct download: {direct_link}')
+                else:
+                    print('\n❌ Upload gagal. Pastikan ChromeDriver tersedia dan desu.si menerima upload dari browser.')
+                break
+            elif choice == '2':
+                stream_to_watchparty(str(file_path))
+                break
+            else:
+                print('Pilihan tidak valid. Masukkan 1 atau 2.')
+    except KeyboardInterrupt:
+        print('\n\n❌ Dibatalkan oleh pengguna.')
+        sys.exit(1)
 
 
 if __name__ == '__main__':
