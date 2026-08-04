@@ -318,7 +318,7 @@ def find_chromedriver(chrome_path: str | None = None):
     return None
 
 
-def build_driver(chrome_path=None, driver_path=None):
+def build_driver(chrome_path=None, driver_path=None, headless=True):
     options = Options()
 
     # Colab/container compatible headless flags
@@ -384,7 +384,10 @@ def build_driver(chrome_path=None, driver_path=None):
         logging.error('Binary Chrome/Chromium tidak bisa dijalankan walaupun terpasang: %s', chrome_path)
         raise EnvironmentError('Chrome/Chromium binary tidak dapat dijalankan.')
 
-    options.add_argument('--headless')
+    # Only enable headless mode if requested. WatchParty streaming requires a visible
+    # browser/tab for WebRTC peer-to-peer connections, so callers can pass headless=False.
+    if headless:
+        options.add_argument('--headless')
 
     if chrome_path:
         logging.info(f'Menggunakan Chrome binary: {chrome_path}')
@@ -851,6 +854,100 @@ def upload_via_browser(file_path: str) -> str | None:
             driver.quit()
 
 
+def stream_to_watchparty(file_path: str) -> None:
+    """Stream a local video file into a WatchParty room using Selenium.
+
+    This function intentionally launches a non-headless browser (headless=False)
+    because WatchParty uses WebRTC and requires an active tab for peer-to-peer.
+    The function will keep the browser open indefinitely to maintain the connection.
+    """
+    logging.info('Membuka browser (non-headless) untuk WatchParty...')
+    driver = None
+    try:
+        try:
+            driver = build_driver(headless=False)
+        except Exception as exc:
+            logging.error('Gagal membuat WebDriver untuk WatchParty: %s', exc)
+            return None
+
+        watchparty_url = 'https://www.watchparty.me/watch/fantastic-receipt-move'
+        logging.info('Navigasi ke WatchParty: %s', watchparty_url)
+        driver.get(watchparty_url)
+
+        # Wait for page to load
+        wait = WebDriverWait(driver, 30)
+        time.sleep(1)
+
+        logging.info('Mencari input file tersembunyi di halaman WatchParty...')
+        file_input = None
+        selectors = [
+            (By.CSS_SELECTOR, 'input[type="file"]'),
+            (By.XPATH, '//input[@type="file"]'),
+        ]
+
+        for selector in selectors:
+            try:
+                file_input = wait.until(EC.presence_of_element_located(selector))
+                logging.info('Found file input with selector: %s', selector)
+                break
+            except Exception:
+                continue
+
+        if file_input is None:
+            # Try a last-resort JS query
+            try:
+                file_input = driver.execute_script("return document.querySelector('input[type=file]');")
+            except Exception:
+                file_input = None
+
+        if file_input is None:
+            logging.error('File input tidak ditemukan di WatchParty.')
+            logging.debug('Page source snippet: %s', driver.page_source[:1000])
+            return None
+
+        # Make the hidden input visible and interactable
+        try:
+            driver.execute_script('arguments[0].style.display = "block"; arguments[0].style.visibility = "visible"; arguments[0].style.opacity = "1"; arguments[0].removeAttribute("hidden");', file_input)
+            driver.execute_script('arguments[0].scrollIntoView(true);', file_input)
+            try:
+                wait.until(EC.element_to_be_clickable(file_input))
+            except Exception:
+                logging.warning('Element tidak clickable, melanjutkan dengan send_keys...')
+        except Exception as exc:
+            logging.debug('Gagal membuat input terlihat: %s', exc)
+
+        logging.info('Mengirim file path ke input WatchParty...')
+        try:
+            file_input.send_keys(file_path)
+            # Trigger change events
+            driver.execute_script('arguments[0].dispatchEvent(new Event("change", { bubbles: true }));', file_input)
+            driver.execute_script('arguments[0].dispatchEvent(new Event("input", { bubbles: true }));', file_input)
+            logging.info('File path dikirim ke input.')
+        except Exception as exc:
+            logging.error('Gagal mengirim file path ke input: %s', exc)
+
+        logging.info('Menjaga browser tetap terbuka untuk menjaga koneksi WatchParty...')
+        # Keep the browser open indefinitely to maintain the WatchParty connection.
+        try:
+            while True:
+                time.sleep(86400)
+        except KeyboardInterrupt:
+            logging.info('KeyboardInterrupt diterima, meninggalkan browser terbuka.')
+
+    except Exception as exc:
+        logging.error('Error saat streaming ke WatchParty: %s', exc)
+        try:
+            logging.debug('Page source snippet: %s', driver.page_source[:800] if driver else 'no driver')
+        except Exception:
+            pass
+        return None
+    finally:
+        # Intentionally do not quit the driver here because we want the browser to remain
+        # open for the duration of the WatchParty. The caller can terminate the process
+        # manually when finished.
+        return None
+
+
 
 
 def search_movie_and_generate_download_link():
@@ -1089,6 +1186,21 @@ def search_movie_and_generate_download_link():
 
 def main():
     file_path: Path
+    # Special CLI for WatchParty streaming
+    if len(sys.argv) >= 2 and sys.argv[1] in ('--watchparty', '-wp'):
+        if len(sys.argv) < 3:
+            print('Usage: python desu.py --watchparty /path/to/video.mp4')
+            sys.exit(1)
+        file_path = Path(sys.argv[2]).resolve()
+        try:
+            verify_file(file_path)
+        except Exception as exc:
+            logging.error(exc)
+            sys.exit(1)
+
+        logging.info(f'File yang dipilih untuk WatchParty: {file_path}')
+        stream_to_watchparty(str(file_path))
+        return
     if len(sys.argv) == 1 or sys.argv[1] in ('--choose', '-c'):
         if not check_google_drive():
             sys.exit(1)
