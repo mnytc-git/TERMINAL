@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Upload file besar ke desu.si menggunakan browser automation.
-Skrip ini dirancang untuk dijalankan di Google Colab atau lingkungan lokal
-yang sudah memiliki Chromium/Chrome + ChromeDriver.
+Otomatis MENGHAPUS file lokal/Drive HANYA jika link valid (.mp4) berhasil didapatkan.
 """
 
 import logging
@@ -27,7 +26,6 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.remote.remote_connection import RemoteConnection
 except ImportError:
     logging.error("Selenium belum terpasang. Jalankan: pip install selenium")
     sys.exit(1)
@@ -41,13 +39,11 @@ except:
 try:
     import requests
 except ImportError:
-    logging.warning("requests belum terpasang. Install dengan: pip install requests")
     requests = None
 
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    logging.warning("beautifulsoup4 belum terpasang. Install dengan: pip install beautifulsoup4")
     BeautifulSoup = None
 
 try:
@@ -55,19 +51,9 @@ try:
 except ImportError:
     ChromeDriverManager = None
 
-try:
-    from google.colab import drive
-    HAS_COLAB_DRIVE = True
-except ImportError:
-    HAS_COLAB_DRIVE = False
-
 UPLOAD_URL = "https://desu.si/"
 MAX_FILE_SIZE_GB = 15.0
 SEARCH_DIR = '/content/drive/MyDrive/'
-
-
-def install_selenium():
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "selenium"])
 
 
 def install_webdriver_manager() -> bool:
@@ -81,51 +67,22 @@ def install_webdriver_manager() -> bool:
         logging.debug('webdriver-manager install error: %s', exc)
         return False
 
-
 def find_chrome_binary():
-    """Cari Chrome/Chromium binary di berbagai lokasi."""
     candidates = [
-        'google-chrome',
-        'google-chrome-stable',
-        'chromium',
-        'chromium-browser',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/usr/bin/chromium',
-        '/usr/bin/chromium-browser',
-        '/snap/bin/chromium',
-        '/opt/google/chrome/chrome',
-        '/opt/chromium/chrome',
-        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        'google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser',
+        '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium',
+        '/usr/bin/chromium-browser', '/snap/bin/chromium', '/opt/google/chrome/chrome',
     ]
-    found_candidates = []
-    
-    # First, try which() and verify path exists
     for candidate in candidates:
         which_result = shutil.which(candidate)
         if which_result and os.path.exists(which_result):
             return which_result
-    
-    # Second, try direct path checks
     for candidate in candidates:
         if os.path.exists(candidate) and os.path.isfile(candidate):
             return candidate
-    
-    # Third, check common debian package locations after apt install
-    debian_paths = [
-        '/usr/lib/chromium-browser/chromium-browser',
-        '/usr/lib/chromium/chromium',
-        '/snap/chromium/current/chromium',
-    ]
-    for path in debian_paths:
-        if os.path.exists(path) and os.path.isfile(path):
-            return path
-    
     return None
 
-
 def install_google_chrome() -> bool:
-    """Download dan install Google Chrome Stable jika Chromium tidak tersedia."""
     if sys.platform != 'linux':
         return False
     deb_url = 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb'
@@ -133,296 +90,56 @@ def install_google_chrome() -> bool:
     try:
         logging.info('Mendownload Google Chrome Stable...')
         subprocess.check_call(['wget', '-q', '-O', deb_path, deb_url])
-        subprocess.check_call(['apt-get', 'install', '-y', '-qq', deb_path],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1)  # Reduced from 2s to 1s
-        if os.path.exists('/usr/bin/google-chrome-stable'):
-            logging.info('Google Chrome Stable berhasil diinstall.')
-            return True
-        logging.warning('Google Chrome Stable terinstall tapi binary tidak ditemukan di lokasi standar.')
+        subprocess.check_call(['apt-get', 'install', '-y', '-qq', deb_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
         return True
-    except Exception as exc:
-        logging.debug('Google Chrome install failed: %s', exc)
+    except Exception:
         return False
 
-
-def install_chromium() -> bool:
-    """Install Chromium otomatis di sistem (Linux only)."""
-    if sys.platform != 'linux':
-        return False
-    try:
-        logging.info('Mencoba install chromium-browser via apt...')
-        subprocess.check_call(['apt-get', 'update', '-qq'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.check_call(['apt-get', 'install', '-y', '-qq', 'chromium-browser'],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(1)  # Reduced from 2s to 1s
-        if os.path.exists('/usr/bin/chromium-browser'):
-            logging.info('Chromium berhasil diinstall di /usr/bin/chromium-browser.')
-            return True
-        elif os.path.exists('/usr/lib/chromium-browser/chromium-browser'):
-            logging.info('Chromium berhasil diinstall di /usr/lib/chromium-browser/chromium-browser.')
-            return True
-        logging.warning('chromium-browser tidak ditemukan setelah install apt.')
-    except Exception as exc:
-        logging.debug('Chromium install failed: %s', exc)
-
-    logging.info('Mencoba install Google Chrome Stable sebagai fallback...')
-    return install_google_chrome()
-
-
-def install_chromium_dependencies() -> bool:
-    """Install system dependencies yang dibutuhkan Chromium di headless environment."""
-    if sys.platform != 'linux':
-        return False
-    deps = [
-        'libglib2.0-0',
-        'libnss3',
-        'libxss1',
-        'libasound2',
-        'libatk1.0-0',
-        'libatk-bridge2.0-0',
-        'libgtk-3-0',
-        'libgdk-pixbuf2.0-0',
-        'libx11-xcb1',
-        'libxcomposite1',
-        'libxdamage1',
-        'libxrandr2',
-        'libxcursor1',
-        'libxfixes3',
-        'libxtst6',
-        'libxkbcommon0',
-        'libdbus-1-3',
-        'libgbm1',
-        'libcups2',
-        'fonts-liberation',
-        'libappindicator3-1',
-    ]
-    try:
-        logging.info('Installing Chromium system dependencies...')
-        subprocess.check_call(['apt-get', 'update', '-qq'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.check_call(['apt-get', 'install', '-y', '-qq'] + deps,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        logging.info('System dependencies installed successfully.')
-        time.sleep(0.5)  # Reduced from 1s to 0.5s
-        return True
-    except Exception as exc:
-        logging.debug('System dependencies install failed: %s', exc)
-        return False
-
-
-def get_chrome_version(chrome_path: str) -> str | None:
-    try:
-        output = subprocess.check_output([chrome_path, '--version'], stderr=subprocess.STDOUT, text=True)
-        match = re.search(r'(\d+\.\d+\.\d+\.\d+)', output)
-        if match:
-            return match.group(1)
-    except Exception as exc:
-        logging.debug('Gagal membaca versi Chrome: %s', exc)
-    return None
-
-
-def chrome_can_start(chrome_path: str) -> bool:
-    if not chrome_path or not os.path.exists(chrome_path):
-        return False
-    cmd = [
-        chrome_path,
-        '--headless',
-        '--disable-gpu',
-        '--no-sandbox',
-        '--disable-dev-shm-usage',
-        '--remote-debugging-port=0',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-extensions',
-        '--disable-crash-reporter',
-        'about:blank',
-    ]
-    try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        time.sleep(3)
-        ret = proc.poll()
-        if ret is not None:
-            stderr = proc.stderr.read().decode(errors='ignore') if proc.stderr else ''
-            logging.debug('Chrome startup test failed for %s: %s', chrome_path, stderr.strip())
-            return False
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        return True
-    except Exception as exc:
-        logging.debug('Chrome startup validation failed: %s', exc)
-        return False
-
-
-def find_chromedriver(chrome_path: str | None = None):
-    driver_path = shutil.which('chromedriver')
-    if driver_path:
-        logging.info('Found chromedriver on PATH: %s', driver_path)
-        return driver_path
-    # Colab / Debian package locations
-    common_paths = [
-        '/usr/bin/chromedriver',
-        '/usr/local/bin/chromedriver',
-        '/opt/bin/chromedriver',
-    ]
-    for path in common_paths:
-        if os.path.exists(path):
-            logging.info('Found chromedriver in common path: %s', path)
-            return path
-
-    if ChromeDriverManager is None:
-        if install_webdriver_manager():
-            logging.info('webdriver_manager terpasang, akan mencoba download ChromeDriver otomatis.')
-        else:
-            return None
-
-    try:
-        version = get_chrome_version(chrome_path) if chrome_path else None
-        if version:
-            logging.info('Detected Chrome version: %s', version)
-            try:
-                driver_path = ChromeDriverManager(version=version).install()
-                logging.info('Downloaded ChromeDriver for exact version: %s', driver_path)
-                return driver_path
-            except Exception as exc:
-                logging.debug('Exact version install failed: %s', exc)
-                major_version = version.split('.')[0]
-                logging.info('Trying ChromeDriver for major version: %s', major_version)
-                try:
-                    driver_path = ChromeDriverManager(version=major_version).install()
-                    logging.info('Downloaded ChromeDriver for major version: %s', driver_path)
-                    return driver_path
-                except Exception as exc2:
-                    logging.debug('Major version install failed: %s', exc2)
-        logging.info('Trying generic ChromeDriver install...')
-        driver_path = ChromeDriverManager().install()
-        logging.info('Downloaded generic ChromeDriver: %s', driver_path)
-        return driver_path
-    except Exception as exc:
-        logging.debug('ChromeDriver manager failed: %s', exc)
-
-    # Last fallback: try apt-based chromedriver if available
-    try:
-        logging.info('Mencoba install paket chromedriver via apt sebagai fallback...')
-        subprocess.check_call(['apt-get', 'update', '-qq'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.check_call(['apt-get', 'install', '-y', '-qq', 'chromedriver'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        driver_path = shutil.which('chromedriver')
-        if driver_path:
-            logging.info('Chromedriver berhasil diinstall dari apt: %s', driver_path)
-            return driver_path
-    except Exception as exc:
-        logging.debug('Apt chromedriver fallback failed: %s', exc)
-
-    return None
-
-
-def build_driver(chrome_path=None, driver_path=None, headless=True):
+def build_driver():
     options = Options()
-
-    # Colab/container compatible headless flags
+    
+    # Mode Headless Modern
+    options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
-    options.add_argument('--disable-setuid-sandbox')
-    options.add_argument('--disable-gpu')
     options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-software-rasterizer')
-    options.add_argument('--disable-accelerated-2d-canvas')
-    options.add_argument('--disable-gpu-compositing')
-    options.add_argument('--disable-background-networking')
-    options.add_argument('--disable-background-timer-throttling')
-    options.add_argument('--disable-renderer-backgrounding')
-    options.add_argument('--disable-device-discovery-notifications')
-    options.add_argument('--disable-hang-monitor')
-    options.add_argument('--disable-infobars')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-default-apps')
-    options.add_argument('--no-first-run')
-    options.add_argument('--no-default-browser-check')
-    options.add_argument('--disable-sync')
-    options.add_argument('--disable-crash-reporter')
-    options.add_argument('--disable-remote-fonts')
+    options.add_argument('--disable-gpu')
     options.add_argument('--mute-audio')
-    options.add_argument('--disable-popup-blocking')
-    options.add_argument('--disable-prompt-on-repost')
-    options.add_argument('--single-process')
-    options.add_argument('--remote-debugging-port=9222')
     options.add_argument('--window-size=1920,1080')
-    options.add_argument('--hide-scrollbars')
-    options.add_argument('--disable-extensions-file-access-check')
-    options.add_argument('--disable-features=TranslateUI,BackgroundTaskHinting,AudioServiceOutOfProcess,VizDisplayCompositor')
-    options.add_argument('--disable-infobars')
-    options.add_argument('--disable-client-side-phishing-detection')
-    options.add_argument('--enable-automation')
-    options.add_argument('--allow-running-insecure-content')
-    options.add_argument('--allow-insecure-localhost')
-    options.add_experimental_option('excludeSwitches', ['enable-automation'])
-    options.add_experimental_option('useAutomationExtension', False)
 
-    if chrome_path is None:
+    chrome_path = find_chrome_binary()
+    if not chrome_path:
+        install_google_chrome()
         chrome_path = find_chrome_binary()
 
-    if chrome_path is not None and not chrome_can_start(chrome_path):
-        logging.warning('Binary Chrome/Chromium ditemukan tapi tidak bisa dijalankan: %s', chrome_path)
-        logging.info('Mencoba install Google Chrome Stable sebagai fallback...')
-        if install_google_chrome():
-            time.sleep(1)  # Reduced from 2s to 1s
-            chrome_path = find_chrome_binary()
-
-    if chrome_path is None:
-        logging.warning('Chrome binary tidak ditemukan, mencoba install Chromium/Chrome...')
-        install_chromium_dependencies()
-        if install_chromium():
-            time.sleep(1)  # Reduced from 2s to 1s
-            chrome_path = find_chrome_binary()
-
-        if chrome_path is None:
-            logging.error('Gagal menemukan Chrome binary setelah install.')
-            raise FileNotFoundError('Chrome binary tidak ditemukan dan tidak bisa diinstall.')
-
-    if chrome_path is not None and not chrome_can_start(chrome_path):
-        logging.error('Binary Chrome/Chromium tidak bisa dijalankan walaupun terpasang: %s', chrome_path)
-        raise EnvironmentError('Chrome/Chromium binary tidak dapat dijalankan.')
-
-    # Only enable headless mode if requested. WatchParty streaming requires a visible
-    # browser/tab for WebRTC peer-to-peer connections, so callers can pass headless=False.
-    if headless:
-        options.add_argument('--headless=new')
-        options.add_argument('--use-fake-ui-for-media-stream')
-        options.add_argument('--autoplay-policy=no-user-gesture-required')
-
     if chrome_path:
-        logging.info(f'Menggunakan Chrome binary: {chrome_path}')
         options.binary_location = chrome_path
 
-    if driver_path is None:
-        driver_path = find_chromedriver(chrome_path)
-    if driver_path is None:
+    if ChromeDriverManager is None:
+        install_webdriver_manager()
+
+    try:
+        driver_path = ChromeDriverManager().install()
+    except Exception:
+        driver_path = shutil.which('chromedriver')
+
+    if not driver_path:
         raise FileNotFoundError('chromedriver tidak ditemukan.')
 
-    # Configure service with longer timeout for large file uploads
     service = Service(driver_path)
-    
-    # Create driver with custom timeout settings
     driver = webdriver.Chrome(service=service, options=options)
-    
-    # Set script timeout to handle long uploads (10 minutes max - reduced from 1 hour)
     driver.set_script_timeout(600)
-    
-    # Set implicit wait
-    driver.implicitly_wait(10)  # Reduced from 30s to 10s
+    driver.implicitly_wait(10)
     
     return driver
-
 
 def verify_file(file_path: Path):
     if not file_path.exists():
         raise FileNotFoundError(f'File tidak ditemukan: {file_path}')
     size_gb = file_path.stat().st_size / (1024**3)
     if size_gb > MAX_FILE_SIZE_GB:
-        raise ValueError(f'File terlalu besar untuk desu.si: {size_gb:.2f} GB > {MAX_FILE_SIZE_GB} GB')
+        raise ValueError(f'File terlalu besar: {size_gb:.2f} GB')
     return True
-
 
 def search_mp4_files(search_dir: str) -> list[Path]:
     mp4_files = []
@@ -434,7 +151,6 @@ def search_mp4_files(search_dir: str) -> list[Path]:
                     mp4_files.append(path)
     return sorted(mp4_files)
 
-
 def choose_file(mp4_files: list[Path]) -> Path:
     while True:
         try:
@@ -445,840 +161,180 @@ def choose_file(mp4_files: list[Path]) -> Path:
         except ValueError:
             print("❌ Input harus angka. Coba lagi.")
 
-
-def check_google_drive() -> bool:
-    if not Path('/content/drive').exists():
-        logging.error('Google Drive belum dimount. Jalankan mount drive di notebook Colab terlebih dahulu:')
-        logging.error('from google.colab import drive')
-        logging.error("drive.mount('/content/drive')")
-        return False
-    return True
-
-
-def extract_link_from_html(html: str) -> str | None:
-    """Extract desu.si link from HTML content with optimized patterns."""
-    if not html:
-        return None
-
-    # Combined regex patterns for efficiency - try most common first
-    patterns = [
-        r'https?://desu\.si/[A-Za-z0-9]+',  # Direct HTTPS link
-        r'desu\.si/[A-Za-z0-9]+',  # Domain + path
-        r'(?:href|src)=["\']([^"\']*desu\.si/[^"\']*)["\']',  # href/src attributes
-        r'["\']([^"\']*desu\.si/[^"\']*)["\']',  # Any quoted desu.si link
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, html, re.IGNORECASE)
-        if match:
-            link = match.group(0) if pattern.startswith('https?') else match.group(1) if '(' in pattern else match.group(0)
-
-            # Ensure proper protocol
-            if not link.startswith('http'):
-                link = f"https://{link}"
-
-            # Validate format
-            if re.match(r'https?://desu\.si/[A-Za-z0-9]+', link):
-                return link
-
-    return None
-
-
-def convert_to_direct_link(desu_link: str) -> str:
-    """Convert desu.si upload link to direct download link."""
-    if not desu_link or 'desu.si' not in desu_link:
-        return desu_link
-
-    # Extract the code from the link
-    match = re.search(r'desu\.si/([A-Za-z0-9]+)', desu_link)
-    if match:
-        code = match.group(1)
-        return f"https://i.desu.si/{code}.mp4"
-
-    return desu_link
-
-
 def execute_script_with_retry(driver, script, *args, max_retries=2, retry_delay=0.5):
-    """Execute JavaScript with retry logic to handle timeout and stale element."""
     for attempt in range(max_retries):
         try:
             return driver.execute_script(script, *args)
         except Exception as exc:
-            exc_str = str(exc).lower()
-            if 'timeout' in exc_str or 'read timed out' in exc_str:
-                if attempt < max_retries - 1:
-                    logging.debug('Script execution timeout (attempt %d/%d), retrying in %.1f seconds...', attempt + 1, max_retries, retry_delay)
-                    time.sleep(retry_delay)
-                    continue
-                else:
-                    logging.debug('Script timeout after %d retries, continuing...', max_retries)
-                    return None
-            elif 'stale element' in exc_str:
-                logging.debug('Stale element reference in script, skipping...')
-                return None
-            else:
-                # For other errors, don't retry
-                raise
-    return None
-
-
-def upload_via_browser(file_path: str) -> str | None:
-    logging.info('Membuka browser headless untuk upload...')
-    driver = None
-    try:
-        driver = build_driver()
-    except Exception as exc:
-        logging.error('Gagal membuat WebDriver: %s', exc)
-        if 'DevToolsActivePort' in str(exc) or 'Chrome failed to start' in str(exc) or 'chrome not reachable' in str(exc):
-            logging.error('💡 Chromium/Chrome gagal start. Pastikan dependency terpasang atau gunakan Google Chrome Stable.')
-            logging.error('   Coba jalankan di Colab: !apt-get update -qq && apt-get install -y -qq libglib2.0-0 libnss3 libxss1 libasound2 libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libgdk-pixbuf2.0-0 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libxcursor1 libxfixes3 libxtst6 libxkbcommon0 libdbus-1-3 libgbm1 libcups2 fonts-liberation libappindicator3-1')
-            logging.error('   Jika Chromium masih gagal, gunakan Google Chrome Stable atau periksa apakah binary %s dapat menjalankan --headless.', chrome_path or 'unknown')
-        return None
-
-    if driver is None:
-        return None
-
-    try:
-        logging.info('Navigasi ke desu.si...')
-        driver.get(UPLOAD_URL)
-
-        # Wait for page to load completely - reduced from 3s to 1s
-        time.sleep(1)
-        wait = WebDriverWait(driver, 30)
-
-        logging.info('Mencari input file...')
-        # Try multiple selectors for file input
-        file_input_selectors = [
-            (By.NAME, 'files[]'),
-            (By.CSS_SELECTOR, 'input[type="file"]'),
-            (By.CSS_SELECTOR, 'input[name="files[]"]'),
-            (By.XPATH, '//input[@type="file"]'),
-        ]
-
-        file_input = None
-        for selector in file_input_selectors:
-            try:
-                file_input = wait.until(EC.presence_of_element_located(selector))
-                logging.info('Found file input with selector: %s', selector)
-                break
-            except:
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
                 continue
-
-        if file_input is None:
-            logging.error('File input tidak ditemukan di halaman.')
-            logging.debug('Page source: %s', driver.page_source[:2000])
             return None
 
-        # Make sure the element is visible and interactable
-        driver.execute_script('arguments[0].style.display = "block";', file_input)
-        driver.execute_script('arguments[0].style.visibility = "visible";', file_input)
-        driver.execute_script('arguments[0].style.opacity = "1";', file_input)
-        driver.execute_script('arguments[0].removeAttribute("hidden");', file_input)
+def check_google_drive() -> bool:
+    if not Path('/content/drive').exists():
+        logging.error('Google Drive belum dimount.')
+        return False
+    return True
 
-        # Scroll to element
-        driver.execute_script('arguments[0].scrollIntoView(true);', file_input)
-
-        # Wait for element to be clickable
-        try:
-            wait.until(EC.element_to_be_clickable(file_input))
-        except:
-            logging.warning('Element tidak clickable, melanjutkan dengan send_keys...')
-
-        logging.info('Mengirim file path ke input...')
-        file_input.send_keys(file_path)
-
-        # Verify file was selected
-        try:
-            selected_files = driver.execute_script('return arguments[0].files;', file_input)
-            if selected_files and len(selected_files) > 0:
-                logging.info('File berhasil dipilih: %s', selected_files[0].name if hasattr(selected_files[0], 'name') else 'unknown')
-                # Try to trigger change event
-                driver.execute_script('arguments[0].dispatchEvent(new Event("change", { bubbles: true }));', file_input)
-                driver.execute_script('arguments[0].dispatchEvent(new Event("input", { bubbles: true }));', file_input)
-            else:
-                logging.warning('File tidak terdeteksi sebagai terpilih.')
-        except Exception as exc:
-            logging.debug('Gagal verifikasi file selection: %s', exc)
-
-        logging.info('Mencari tombol submit...')
-        # Try multiple selectors for submit button
-        submit_selectors = [
-            (By.CSS_SELECTOR, 'input[type=submit]'),
-            (By.CSS_SELECTOR, 'button[type=submit]'),
-            (By.CSS_SELECTOR, 'input[value*="upload" i]'),
-            (By.CSS_SELECTOR, 'button:contains("Upload")'),
-            (By.XPATH, '//input[@type="submit"]'),
-            (By.XPATH, '//button[contains(text(), "Upload")]'),
-            (By.XPATH, '//input[contains(@value, "Upload")]'),
-            (By.CSS_SELECTOR, 'input[name="submit"]'),
-        ]
-
-        submit_button = None
-        for selector in submit_selectors:
-            try:
-                submit_button = driver.find_element(*selector)
-                logging.info('Found submit button with selector: %s', selector)
-                break
-            except:
-                continue
-
-        if submit_button is None:
-            logging.error('Tombol submit tidak ditemukan.')
-            return None
-
-        # Wait for submit button to be enabled and clickable
-        logging.info('Menunggu tombol submit siap...')
-        max_wait = 10  # Reduced from 30s to 10s - button usually enables immediately
-        button_enabled = False
-
-        for i in range(max_wait):
-            try:
-                # Check if button is enabled
-                is_enabled = driver.execute_script('return !arguments[0].disabled;', submit_button)
-                is_visible = driver.execute_script('return arguments[0].offsetWidth > 0 && arguments[0].offsetHeight > 0;', submit_button)
-                button_text = driver.execute_script('return arguments[0].value || arguments[0].textContent || arguments[0].innerText;', submit_button)
-
-                logging.debug('Button state (attempt %d): enabled=%s, visible=%s, text="%s"', i+1, is_enabled, is_visible, button_text.strip())
-
-                if is_enabled:
-                    logging.info('Submit button enabled!')
-                    button_enabled = True
-                    break
-                else:
-                    logging.debug('Submit button masih disabled, menunggu...')
-                    time.sleep(1)
-            except Exception as exc:
-                logging.debug('Error checking button state (attempt %d): %s', i+1, exc)
-                time.sleep(1)
-
-        # If button never enables, try to force submit anyway
-        if not button_enabled:
-            logging.warning('Submit button tetap disabled setelah %d detik. Mencoba force submit...', max_wait)
-
-            # Try to submit the form directly using JavaScript
-            try:
-                # Find the form containing the file input
-                form = execute_script_with_retry(driver, 'return arguments[0].form;', file_input, max_retries=2, retry_delay=1)
-                if form:
-                    result = execute_script_with_retry(driver, 'arguments[0].submit();', form, max_retries=2, retry_delay=1)
-                    logging.info('Form submitted using JavaScript.')
-                else:
-                    # Try clicking the button with JavaScript anyway
-                    execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=1, retry_delay=1)
-                    execute_script_with_retry(driver, 'arguments[0].removeAttribute("disabled");', submit_button, max_retries=1, retry_delay=1)
-                    execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=2, retry_delay=1)
-                    logging.info('Submit button diklik menggunakan JavaScript (force).')
-            except Exception as exc:
-                exc_str = str(exc).lower()
-                if 'stale element' in exc_str:
-                    logging.debug('Button element became stale during upload, ignoring and continuing...')
-                else:
-                    logging.debug('Force submit encountered error: %s', exc)
-                logging.info('Continuing to monitor upload progress...')
-        else:
-            # Button is enabled, click normally
-            try:
-                execute_script_with_retry(driver, 'arguments[0].scrollIntoView(true);', submit_button, max_retries=1, retry_delay=1)
-                execute_script_with_retry(driver, 'arguments[0].click();', submit_button, max_retries=2, retry_delay=1)
-                logging.info('Submit button diklik menggunakan JavaScript.')
-            except Exception as exc:
-                exc_str = str(exc).lower()
-                if 'stale element' in exc_str:
-                    logging.debug('Button element became stale during click, ignoring and continuing...')
-                else:
-                    logging.debug('Submit click encountered error: %s', exc)
-                logging.info('Continuing to monitor upload progress...')
-
-        logging.info('Upload dimulai, menunggu hasil...')
-        time.sleep(1)  # Reduced from 3s to 1s - upload starts immediately
-        start_time = time.time()
-        check_interval = 1  # Reduced from 2s to 1s for faster detection
-
-        # Wait for upload completion - check for link or success message
-        # For large files, use infinite wait as upload can take hours
-        max_wait_seconds = 86400  # 24 hours max
-
-        def check_upload_complete():
-            try:
-                # Get page content and URL - optimized for speed
-                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.2)
-                if not page:
-                    return False, None
-
-                page_lower = page.lower()
-
-                try:
-                    url = driver.current_url.lower()
-                except:
-                    url = ''
-
-                # Check for desu.si link in page or URL - most important check first
-                link = extract_link_from_html(page)
-                if link:
-                    logging.info('Upload completed! Link found in page.')
-                    return True, link
-
-                # Check if redirected to result page
-                if url and 'desu.si/' in url and url != UPLOAD_URL.lower():
-                    logging.info('Redirect detected to result page: %s', url)
-                    # Try extract from URL
-                    url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', url)
-                    if url_match:
-                        link = f"https://desu.si/{url_match.group(1)}"
-                        logging.info('Link extracted from URL redirect.')
-                        return True, link
-                    return True, url
-
-                # Check for success indicators in page content - optimized
-                success_indicators = [
-                    'upload successful', 'upload complete', 'file uploaded',
-                    'success', 'berhasil', 'complete', 'finished', 'uploaded', 'done'
-                ]
-                for indicator in success_indicators:
-                    if indicator in page_lower:
-                        logging.info('Detected success indicator: "%s"', indicator)
-                        # Try to find link in the success page
-                        link = extract_link_from_html(page)
-                        if link:
-                            return True, link
-                        break
-
-                # Check for error indicators - optimized
-                error_indicators = ['error', 'failed', 'gagal', 'invalid', 'too large', 'file size exceeded']
-                for indicator in error_indicators:
-                    if indicator in page_lower:
-                        logging.warning('Detected error indicator: "%s"', indicator)
-                        return True, None
-
-                # Quick check if we're still on upload page
-                if 'input type="file"' in page_lower or 'name="files[]"' in page_lower:
-                    return False, None  # Still uploading
-
-                # If page changed but no clear indicators, check for any desu.si URL
-                desu_urls = re.findall(r'https?://[^\s<>"\']*desu\.si[^\s<>"\']*', page)
-                if desu_urls:
-                    link = desu_urls[0]
-                    logging.info('Found desu.si URL in changed page: %s', link)
-                    return True, link
-
-                return False, None
-            except Exception as exc:
-                logging.debug('Error checking upload status: %s', exc)
-                return False, None
-
-        link = None
-        check_count = 0
-        last_progress_log = 0
-
-        while time.time() - start_time < max_wait_seconds:
-            try:
-                is_complete, found_link = check_upload_complete()
-                if is_complete:
-                    link = found_link
-                    break
-
-                check_count += 1
-                elapsed = int(time.time() - start_time)
-
-                # Log progress every 15 seconds or every 5 checks - more frequent feedback
-                if elapsed - last_progress_log >= 15 or check_count % 5 == 0:
-                    logging.info('Upload in progress... (elapsed: %d seconds, checks: %d)', elapsed, check_count)
-                    last_progress_log = elapsed
-
-                time.sleep(check_interval)
-            except Exception as exc:
-                logging.debug('Error during upload monitoring (check %d): %s', check_count, exc)
-                time.sleep(check_interval)
-
-        if time.time() - start_time >= max_wait_seconds:
-            logging.warning('Upload wait timeout setelah 24 jam.')
-
-        if link:
-            logging.info('Upload berhasil, link ditemukan: %s', link)
-            return convert_to_direct_link(link)
-
-        # If no link found yet, try to get current page state with multiple attempts
-        logging.info('Performing final link extraction checks...')
-        for attempt in range(2):  # Reduced from 3 to 2 attempts
-            try:
-                # Try to refresh page to get final state
-                if attempt > 0:
-                    driver.refresh()
-                    time.sleep(1)  # Reduced from 2s to 1s
-
-                current_url = driver.current_url.lower()
-                page_source = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;', max_retries=1, retry_delay=0.2)
-
-                if not page_source:
-                    continue
-
-                # Check if redirected
-                if current_url and current_url != UPLOAD_URL.lower():
-                    logging.info('Final URL: %s', current_url)
-                    if 'desu.si' in current_url:
-                        url_match = re.search(r'desu\.si/([A-Za-z0-9]+)', current_url)
-                        if url_match:
-                            link = f"https://desu.si/{url_match.group(1)}"
-                            logging.info('Link extracted from final URL: %s', link)
-                            return convert_to_direct_link(link)
-
-                # Try multiple extraction methods
-                link = extract_link_from_html(page_source)
-                if link:
-                    logging.info('Link extracted from final page content.')
-                    return convert_to_direct_link(link)
-
-                # Try to find any desu.si URL in the page
-                desu_urls = re.findall(r'https?://[^\s<>"\']*desu\.si[^\s<>"\']*', page_source)
-                if desu_urls:
-                    link = desu_urls[0]  # Take first desu.si URL found
-                    logging.info('Found desu.si URL in page: %s', link)
-                    return convert_to_direct_link(link)
-
-            except Exception as exc:
-                logging.debug('Error in final link extraction (attempt %d): %s', attempt + 1, exc)
-                time.sleep(0.5)  # Reduced delay
-
-        logging.error('Upload selesai tapi link tidak ditemukan setelah semua percobaan.')
-        logging.debug('Final URL: %s', current_url if 'current_url' in locals() else 'unknown')
-        return None
-
-    except Exception as exc:
-        logging.error('Upload browser gagal: %s', exc)
-        try:
-            logging.debug('Status URL: %s', driver.current_url)
-            logging.debug('Page source snippet: %s', driver.page_source[:800])
-        except:
-            pass
-        return None
-    finally:
-        if driver:
-            driver.quit()
-
-
-def stream_to_watchparty(file_path: str) -> None:
-    """Stream a local video file into a WatchParty room using Selenium.
-
-    This function intentionally launches a non-headless browser (headless=False)
-    because WatchParty uses WebRTC and requires an active tab for peer-to-peer.
-    The function will keep the browser open indefinitely to maintain the connection.
-    """
-    logging.info('Membuka browser (non-headless) untuk WatchParty...')
-    driver = None
-    try:
-        try:
-            driver = build_driver(headless=True)
-        except Exception as exc:
-            logging.error('Gagal membuat WebDriver untuk WatchParty: %s', exc)
-            return None
-
-        watchparty_url = 'https://www.watchparty.me/watch/fantastic-receipt-move'
-        logging.info('Navigasi ke WatchParty: %s', watchparty_url)
-        driver.get(watchparty_url)
-
-        # Wait for page to load
-        wait = WebDriverWait(driver, 30)
-        time.sleep(1)
-
-        logging.info('Menerapkan Bypass FilePicker tingkat mendalam...')
-        try:
-            # 1. Matikan API File System modern & Cegat elemen <input> dari memori
-            driver.execute_script("""
-                delete window.showOpenFilePicker;
-                
-                function attachToDOM(target) {
-                    if (target.id === 'wp-captured-input') return;
-                    target.id = 'wp-captured-input';
-                    target.style.display = 'block';
-                    target.style.position = 'fixed';
-                    target.style.top = '0';
-                    target.style.left = '0';
-                    target.style.zIndex = '999999';
-                    target.style.opacity = '0.01';
-                    document.body.appendChild(target);
-                }
-
-                const originalCreateElement = document.createElement.bind(document);
-                document.createElement = function(tagName) {
-                    const el = originalCreateElement(tagName);
-                    if (tagName.toLowerCase() === 'input') {
-                        const originalSetAttribute = el.setAttribute.bind(el);
-                        el.setAttribute = function(name, value) {
-                            originalSetAttribute(name, value);
-                            if (name === 'type' && value === 'file') attachToDOM(el);
-                        };
-                        return new Proxy(el, {
-                            set(target, prop, value) {
-                                target[prop] = value;
-                                if (prop === 'type' && value === 'file') attachToDOM(target);
-                                return true;
-                            }
-                        });
-                    }
-                    return el;
-                };
-            """)
-            
-            # 2. Klik tombol UI untuk memicu pembuatan input file
-            driver.execute_script("""
-                const btns = Array.from(document.querySelectorAll('button'));
-                const joinBtn = btns.find(b => b.textContent.includes('Join'));
-                if (joinBtn) joinBtn.click();
-            """)
-            time.sleep(1)
-            
-            driver.execute_script("""
-                const elements = Array.from(document.querySelectorAll('*'));
-                const fileBtn = elements.find(el => el.textContent.trim() === 'File' && el.tagName !== 'SCRIPT');
-                if (fileBtn) fileBtn.click();
-            """)
-            time.sleep(1.5)
-            
-            driver.execute_script("""
-                const btns = Array.from(document.querySelectorAll('button'));
-                const startBtn = btns.find(b => b.textContent.includes('Start Fileshare'));
-                if (startBtn) startBtn.click();
-            """)
-            
-            # 3. Tunggu elemen hasil tangkapan Proxy muncul di DOM
-            logging.info('Menunggu tangkapan input file tersembunyi...')
-            file_input = wait.until(EC.presence_of_element_located((By.ID, 'wp-captured-input')))
-            
-            logging.info('Menyuntikkan video ke WatchParty...')
-            file_input.send_keys(file_path)
-            
-            # 4. Picu event agar WatchParty memproses filenya
-            driver.execute_script('arguments[0].dispatchEvent(new Event("change", { bubbles: true }));', file_input)
-            logging.info('File berhasil disuntikkan! Video akan segera diputar.')
-            
-            # Tutup modal setelah selesai
-            driver.execute_script("""
-                const closeBtn = document.querySelector('.mantine-Modal-close');
-                if (closeBtn) closeBtn.click();
-            """)
-            
-        except Exception as exc:
-            logging.error('Gagal melakukan bypass mendalam: %s', exc)
-            return None
-
-        logging.info('Menjaga browser tetap terbuka untuk menjaga koneksi WatchParty...')
-        # Keep the browser open indefinitely to maintain the WatchParty connection.
-        try:
-            while True:
-                time.sleep(86400)
-        except KeyboardInterrupt:
-            logging.info('KeyboardInterrupt diterima, meninggalkan browser terbuka.')
-
-    except Exception as exc:
-        logging.error('Error saat streaming ke WatchParty: %s', exc)
-        try:
-            logging.debug('Page source snippet: %s', driver.page_source[:800] if driver else 'no driver')
-        except Exception:
-            pass
-        return None
-    finally:
-        # Intentionally do not quit the driver here because we want the browser to remain
-        # open for the duration of the WatchParty. The caller can terminate the process
-        # manually when finished.
-        return None
-
-
-
-
+# FUNGSI SCRAPING LK21 TETAP DIPERTAHANKAN
 def search_movie_and_generate_download_link():
-    """
-    Search for movies on LK21 and generate a download link.
-    
-    Steps:
-    1. Prompt user for search keyword
-    2. Scrape LK21 search results
-    3. Display results as numbered list
-    4. Prompt user to select a movie
-    5. Extract movie slug from URL
-    6. Construct download URL using dl.lk21.party/get/ domain
-    7. Print final download link
-    """
-    
-    # Check if required libraries are installed
-    if requests is None:
-        print("❌ Perpustakaan 'requests' tidak tersedia. Install dengan: pip install requests")
-        return
-    if BeautifulSoup is None:
-        print("❌ Perpustakaan 'beautifulsoup4' tidak tersedia. Install dengan: pip install beautifulsoup4")
+    if requests is None or BeautifulSoup is None:
+        print("❌ requests/beautifulsoup4 tidak tersedia.")
         return
     
     BASE_DOMAIN = "https://tv10.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dl.lk21.party/get"
     
-    # Set a timeout for requests
-    REQUEST_TIMEOUT = 10
+    print("\n" + "="*50)
+    print("🎬 MOVIE SEARCH & DOWNLOAD LINK GENERATOR")
+    print("="*50)
     
-    # User-Agent to avoid blocking
-    HEADERS = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
+    keyword = input("\n👉 Masukkan keyword pencarian: ").strip()
+    if not keyword:
+        return
     
+    print(f"\n🔍 Mencari film dengan keyword '{keyword}'...")
+    driver = None
     try:
-        # Step 1: Prompt user for search keyword
-        print("\n" + "="*50)
-        print("🎬 MOVIE SEARCH & DOWNLOAD LINK GENERATOR")
-        print("="*50)
+        driver = build_driver()
+        driver.get(f"{BASE_DOMAIN}/?s={keyword}")
+        time.sleep(10)
+        page_source = driver.page_source
         
-        keyword = input("\n👉 Masukkan keyword pencarian (contoh: ninja): ").strip()
+        soup = BeautifulSoup(page_source, 'html.parser')
+        movies = []
+        for article in soup.select('.post-item, article, .item-series, .film-item'):
+            title_elem = article.find('h2') or article.find('h3') or article.find('a')
+            link_elem = article.find('a', href=True)
+            if title_elem and link_elem:
+                movies.append({'title': title_elem.get_text(strip=True), 'url': link_elem['href']})
         
-        if not keyword:
-            print("❌ Keyword tidak boleh kosong!")
+        if not movies:
+            print("❌ Tidak ada film ditemukan.")
             return
-        
-        # Step 2: Load LK21 search page using Selenium WebDriver
-        print(f"\n🔍 Mencari film dengan keyword '{keyword}'...")
-        
-        driver = None
-        page_source = None
-        try:
-            search_urls = [
-                f"{BASE_DOMAIN}/?s={keyword}",
-                f"{BASE_DOMAIN}/search/{keyword}",
-            ]
-
-            try:
-                driver = build_driver()
-            except Exception as e:
-                print(f"❌ Gagal membuat browser untuk pencarian: {e}")
-                return
-
-            for search_url in search_urls:
-                try:
-                    logging.debug(f"Mencoba URL: {search_url}")
-                    driver.get(search_url)
-                    time.sleep(10)
-                    logging.info(f"Page Title: {driver.title}")
-                    if 'Just a moment' in driver.title:
-                        logging.info('Cloudflare masih memeriksa, menunggu 5 detik lagi...')
-                        time.sleep(5)
-                    page_source = driver.page_source
-                    if page_source and len(page_source) > 100:
-                        logging.info(f"Berhasil mengakses: {search_url}")
-                        break
-                except Exception as e:
-                    logging.debug(f"Gagal mengakses {search_url}: {e}")
-                    page_source = None
-                    continue
-
-            if not page_source:
-                print("❌ Gagal mengakses LK21 melalui browser. Pastikan URL dan koneksi internet sudah benar.")
-                return
-        finally:
-            if driver:
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
-
-        # Step 3: Parse HTML to extract movies
-        try:
-            soup = BeautifulSoup(page_source, 'html.parser')
             
-            # Try multiple selectors for movie entries
-            # Common selectors: .post-item, .item-series, article, .film-item, .movie-item
-            movie_selectors = [
-                'article',
-                '.post-item',
-                '.item-series',
-                '.film-item',
-                '.movie-item',
-                '.box-item',
-            ]
-            
-            movies = []
-            for selector in movie_selectors:
-                articles = soup.select(selector)
-                if articles:
-                    logging.info(f"Ditemukan {len(articles)} artikel dengan selector '{selector}'")
-                    
-                    for article in articles:
-                        # Try to find title and link
-                        title_elem = article.find('h2') or article.find('h3') or article.find('a')
-                        if not title_elem:
-                            continue
-                        
-                        link_elem = article.find('a', href=True)
-                        if not link_elem or not link_elem.get('href'):
-                            continue
-                        
-                        title = title_elem.get_text(strip=True)
-                        link = link_elem['href']
-                        
-                        # Ensure absolute URL
-                        if link.startswith('/'):
-                            link = BASE_DOMAIN + link
-                        elif not link.startswith('http'):
-                            link = BASE_DOMAIN + '/' + link
-                        
-                        # Remove query parameters if present
-                        if '?' in link:
-                            link = link.split('?')[0]
-                        
-                        if title and link:
-                            movies.append({'title': title, 'url': link})
-                    
-                    if movies:
-                        break
-            
-            if not movies:
-                print("❌ Tidak ada film ditemukan untuk keyword tersebut.")
-                return
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_movies = []
-            for movie in movies:
-                if movie['url'] not in seen:
-                    seen.add(movie['url'])
-                    unique_movies.append(movie)
-            
-            movies = unique_movies[:50]  # Limit to 50 results
-            
-            if not movies:
-                print("❌ Tidak ada film unik ditemukan.")
-                return
-        
-        except Exception as e:
-            print(f"❌ Error saat parse HTML: {e}")
-            logging.debug(f"Page source length: {len(page_source) if page_source else 0}")
-            return
-        
-        # Step 4: Display movies as numbered list
         print(f"\n✅ Ditemukan {len(movies)} hasil pencarian:\n")
-        for i, movie in enumerate(movies, start=1):
-            print(f"[{i}] {movie['title'][:70]}")  # Limit title length
+        for i, m in enumerate(movies[:20], 1):
+            print(f"[{i}] {m['title'][:70]}")
+            
+        choice = int(input("\n👉 Pilih nomor film (0 untuk batal): "))
+        if choice == 0: return
         
-        print("\n" + "-"*50)
+        selected = movies[choice-1]
+        slug = selected['url'].rstrip('/').split('/')[-1]
         
-        # Step 5: Prompt user to select a movie
-        while True:
-            try:
-                choice = input("\n👉 Pilih nomor film (1-{}) atau 0 untuk batal: ".format(len(movies)))
-                
-                if choice == '0':
-                    print("❌ Dibatalkan.")
-                    return
-                
-                choice_num = int(choice)
-                if 1 <= choice_num <= len(movies):
-                    selected_movie = movies[choice_num - 1]
-                    break
-                else:
-                    print(f"❌ Nomor tidak valid. Pilih antara 1-{len(movies)}")
-            except ValueError:
-                print("❌ Input harus berupa angka!")
-        
-        print(f"\n✅ Film dipilih: {selected_movie['title']}")
-        movie_url = selected_movie['url']
-        logging.info(f"URL asli: {movie_url}")
-        
-        # Step 6: Extract movie slug from URL
-        # Extract the last path segment from the URL (remove trailing slashes)
-        movie_url_clean = movie_url.rstrip('/')
-        movie_slug = movie_url_clean.split('/')[-1]
-        
-        if not movie_slug:
-            print("❌ Gagal mengekstrak slug film dari URL.")
-            return
-        
-        # Remove common file extensions if present (shouldn't happen but just in case)
-        if '.' in movie_slug:
-            movie_slug = movie_slug.split('.')[0]
-        
-        logging.info(f"Extracted slug: {movie_slug}")
-        
-        # Step 7: Construct download URL
-        download_link = f"{DOWNLOAD_DOMAIN}/{movie_slug}"
-        
-        # Step 8: Print final download link
-        print("\n" + "="*50)
-        print("🎉 DOWNLOAD LINK BERHASIL DIBUAT!")
-        print("="*50)
-        print(f"\n🎬 Film: {selected_movie['title']}")
-        print(f"🔗 URL Asli: {movie_url}")
-        print(f"📥 Download Link: {download_link}")
-        print("\n" + "="*50)
-        
-        # Optional: Copy to clipboard (if on Google Colab or system with xclip)
-        try:
-            import subprocess
-            process = subprocess.Popen(['xclip', '-selection', 'clipboard'], stdin=subprocess.PIPE)
-            process.communicate(download_link.encode('utf-8'))
-            print("✅ Download link disalin ke clipboard!")
-        except Exception:
-            logging.debug("Tidak dapat menyalin ke clipboard (xclip tidak tersedia)")
-    
-    except KeyboardInterrupt:
-        print("\n\n❌ Dibatalkan oleh pengguna.")
+        print("\n🎉 DOWNLOAD LINK BERHASIL DIBUAT!")
+        print(f"📥 Download Link: {DOWNLOAD_DOMAIN}/{slug}")
     except Exception as e:
-        print(f"❌ Error yang tidak terduga: {e}")
-        logging.exception("Unexpected error in movie search function")
+        print(f"❌ Error: {e}")
+    finally:
+        if driver: driver.quit()
+
+def upload_via_browser(file_path: str) -> str | None:
+    logging.info('Membuka browser headless untuk upload ke desu.si...')
+    try:
+        driver = build_driver()
+    except Exception as exc:
+        logging.error('Gagal membuat WebDriver: %s', exc)
+        return None
+
+    try:
+        logging.info('Navigasi ke desu.si...')
+        driver.get(UPLOAD_URL)
+        time.sleep(2)
+        wait = WebDriverWait(driver, 30)
+
+        logging.info('Mencari input file...')
+        file_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"], input[name="files[]"]')))
+        
+        # Buat elemen terlihat
+        driver.execute_script('arguments[0].style.display = "block"; arguments[0].removeAttribute("hidden");', file_input)
+        
+        logging.info('Mengirim file path ke input...')
+        file_input.send_keys(file_path)
+
+        logging.info('Mencari tombol submit...')
+        submit_button = driver.find_element(By.CSS_SELECTOR, 'input[type=submit], button[type=submit]')
+        
+        # Eksekusi Submit
+        execute_script_with_retry(driver, 'arguments[0].click();', submit_button)
+        logging.info('Upload dimulai, menunggu hasil...')
+        
+        start_time = time.time()
+        max_wait_seconds = 86400  # Maksimal 24 Jam
+
+        while time.time() - start_time < max_wait_seconds:
+            try:
+                url = driver.current_url.lower()
+                
+                # JIKA BROWSER DIARAHKAN KE HALAMAN UPLOAD.PHP / HASIL
+                if url and 'desu.si/' in url and url != UPLOAD_URL.lower():
+                    try:
+                        # Sapu Jagat: Ambil seluruh isi teks di body
+                        body_text = driver.find_element(By.TAG_NAME, 'body').text
+                        body_text_clean = body_text.replace('\\/', '/')
+                        
+                        # Deteksi penolakan server (seperti 403 Forbidden)
+                        if '403 forbidden' in body_text.lower() or 'error' in body_text.lower():
+                            logging.error('Server menolak file: %s', body_text)
+                            return None
+
+                        # Cari URL .mp4 secara spesifik
+                        match = re.search(r'(https?://[^\s"\'<>\[\]]+\.mp4)', body_text_clean)
+                        if match:
+                            return match.group(1)
+                            
+                    except Exception:
+                        pass
+                
+                # FALLBACK: Jika tidak redirect, cek HTML halaman saat ini
+                page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;')
+                if page:
+                    page_clean = page.replace('\\/', '/')
+                    match = re.search(r'(https?://[^\s"\'<>\[\]]+\.mp4)', page_clean)
+                    if match:
+                        return match.group(1)
+
+                elapsed = int(time.time() - start_time)
+                if elapsed % 15 == 0:
+                    logging.info('Upload in progress... (elapsed: %d seconds)', elapsed)
+                time.sleep(1)
+
+            except Exception as exc:
+                time.sleep(1)
+                
+        return None
+
+    except Exception as exc:
+        logging.error('Upload browser gagal: %s', exc)
+        return None
+    finally:
+        if driver:
+            driver.quit()
 
 def main():
-    file_path: Path
-    # Special CLI for WatchParty streaming
-    if len(sys.argv) >= 2 and sys.argv[1] in ('--watchparty', '-wp'):
-        if len(sys.argv) < 3:
-            print('Usage: python desu.py --watchparty /path/to/video.mp4')
-            sys.exit(1)
-        file_path = Path(sys.argv[2]).resolve()
-        try:
-            verify_file(file_path)
-        except Exception as exc:
-            logging.error(exc)
-            sys.exit(1)
-
-        logging.info(f'File yang dipilih untuk WatchParty: {file_path}')
-        stream_to_watchparty(str(file_path))
-        return
-    if len(sys.argv) == 1 or sys.argv[1] in ('--choose', '-c'):
-        if not check_google_drive():
-            sys.exit(1)
-
-        mp4_files = search_mp4_files(SEARCH_DIR)
-        if not mp4_files:
-            logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
-            sys.exit(1)
-
-        print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
-        for i, path in enumerate(mp4_files, start=1):
-            size_mb = path.stat().st_size / (1024 * 1024)
-            print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
-
-        print('\n' + '-' * 50)
-        file_path = choose_file(mp4_files)
-    elif len(sys.argv) == 2:
-        if sys.argv[1] in ('--movie-search', '-m', '--search'):
-            search_movie_and_generate_download_link()
+    if len(sys.argv) > 1 and sys.argv[1] in ('--movie-search', '-m', '--search', '--search-upload', '-su'):
+        search_movie_and_generate_download_link()
+        if sys.argv[1] not in ('--search-upload', '-su'):
             return
-        if sys.argv[1] in ('--search-upload', '-su'):
-            search_movie_and_generate_download_link()
-            input("\n⏳ Press Enter once you have clicked 'Google Share' and the movie has successfully appeared in your Google Drive...")
-            if not check_google_drive():
-                sys.exit(1)
+        input("\n⏳ Press Enter once you have saved the movie to your Google Drive...")
 
-            mp4_files = search_mp4_files(SEARCH_DIR)
-            if not mp4_files:
-                logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
-                sys.exit(1)
-
-            print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
-            for i, path in enumerate(mp4_files, start=1):
-                size_mb = path.stat().st_size / (1024 * 1024)
-                print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
-
-            print('\n' + '-' * 50)
-            file_path = choose_file(mp4_files)
-        else:
-            file_path = Path(sys.argv[1]).resolve()
-    else:
-        print('Usage: python desu_si_selenium_upload.py [--choose | --movie-search | --search-upload | /path/to/video.mp4]')
+    if not check_google_drive():
         sys.exit(1)
+
+    mp4_files = search_mp4_files(SEARCH_DIR)
+    if not mp4_files:
+        logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
+        sys.exit(1)
+
+    print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
+    for i, path in enumerate(mp4_files, start=1):
+        size_mb = path.stat().st_size / (1024 * 1024)
+        print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
+
+    print('\n' + '-' * 50)
+    file_path = choose_file(mp4_files)
 
     try:
         verify_file(file_path)
@@ -1287,33 +343,27 @@ def main():
         sys.exit(1)
 
     logging.info(f'File yang dipilih: {file_path}')
-
-    # Interactive menu: let user choose between uploading to desu.si or streaming to WatchParty
-    try:
-        while True:
-            print('\nMau diapain file ini?')
-            print('[1] Upload ke desu.si (untuk link download/hotlink)')
-            print('[2] Stream ke WatchParty (Peer-to-Peer)')
-            choice = input('👉 Masukkan pilihan (1/2): ').strip()
-            if choice == '1':
-                link = upload_via_browser(str(file_path))
-                if link:
-                    direct_link = convert_to_direct_link(link)
-                    print('\n🎉 UPLOAD BERHASIL!')
-                    print(f'Upload link: {link}')
-                    print(f'📥 Direct download: {direct_link}')
-                else:
-                    print('\n❌ Upload gagal. Pastikan ChromeDriver tersedia dan desu.si menerima upload dari browser.')
-                break
-            elif choice == '2':
-                stream_to_watchparty(str(file_path))
-                break
-            else:
-                print('Pilihan tidak valid. Masukkan 1 atau 2.')
-    except KeyboardInterrupt:
-        print('\n\n❌ Dibatalkan oleh pengguna.')
-        sys.exit(1)
-
+    
+    # LANGSUNG UPLOAD TANPA MENU WATCHPARTY
+    link = upload_via_browser(str(file_path))
+    
+    # CEK KEAMANAN SEBELUM MENGHAPUS
+    # 1. Link harus ada
+    # 2. Link harus mengandung kata desu.si
+    # 3. Link harus berakhiran .mp4
+    if link and 'desu.si' in link and link.endswith('.mp4'):
+        print('\n🎉 UPLOAD BERHASIL!')
+        print(f'📥 Direct download: {link}')
+        
+        # EKSEKUSI HAPUS FILE (AMAN)
+        try:
+            file_path.unlink()
+            print(f'✅ File asli di Google Drive berhasil dihapus: {file_path.name}')
+        except Exception as e:
+            print(f'⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
+    else:
+        print('\n❌ Upload gagal, diblokir server, atau link tidak valid.')
+        print(f'⚠️ File "{file_path.name}" TIDAK dihapus dari Google Drive demi keamanan.')
 
 if __name__ == '__main__':
     main()
