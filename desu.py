@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Upload file besar ke desu.si menggunakan browser automation.
-Otomatis memutar video di WatchParty setelah berhasil.
-Otomatis MENGHAPUS file lokal/Drive HANYA jika link valid (.mp4) berhasil didapatkan.
+ULTIMATE AUTO-STREAMING BOT
+LK21 Search -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
 """
 
 import logging
@@ -56,6 +55,7 @@ except ImportError:
 UPLOAD_URL = "https://desu.si/"
 MAX_FILE_SIZE_GB = 15.0
 SEARCH_DIR = '/content/drive/MyDrive/'
+ROOM_URL = "https://www.watchparty.me/watch/fantastic-receipt-move"
 
 
 def install_webdriver_manager() -> bool:
@@ -156,7 +156,7 @@ def search_mp4_files(search_dir: str) -> list[Path]:
 def choose_file(mp4_files: list[Path]) -> Path:
     while True:
         try:
-            pilihan = int(input("👉 Ketik NOMOR video yang ingin di-upload: "))
+            pilihan = int(input("\n👉 Ketik NOMOR video yang ingin diproses: "))
             if 1 <= pilihan <= len(mp4_files):
                 return mp4_files[pilihan - 1]
             print("❌ Nomor tidak valid. Coba lagi.")
@@ -175,60 +175,116 @@ def execute_script_with_retry(driver, script, *args, max_retries=2, retry_delay=
 
 def check_google_drive() -> bool:
     if not Path('/content/drive').exists():
-        logging.error('Google Drive belum dimount.')
+        logging.error('Google Drive belum dimount. Mount terlebih dahulu.')
         return False
     return True
 
-def search_movie_and_generate_download_link():
+def run_auto_lk21_flow() -> Path | None:
+    """Logika Tingkat Tinggi: Scraping LK21 -> Beri Link -> Pantau Folder Drive"""
     if requests is None or BeautifulSoup is None:
-        print("❌ requests/beautifulsoup4 tidak tersedia.")
-        return
+        print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
+        return None
     
-    BASE_DOMAIN = "https://tv10.lk21official.cc"
-    DOWNLOAD_DOMAIN = "https://dl.lk21.party/get"
+    BASE_DOMAIN = "https://tv12.lk21official.cc"
+    DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
     print("\n" + "="*50)
-    print("🎬 MOVIE SEARCH & DOWNLOAD LINK GENERATOR")
+    print("🎬 LK21 SEARCH & AUTO-DETECTOR")
     print("="*50)
     
-    keyword = input("\n👉 Masukkan keyword pencarian: ").strip()
+    keyword = input("👉 Masukkan judul film (Contoh: Wonder Woman): ").strip()
     if not keyword:
-        return
+        return None
     
     print(f"\n🔍 Mencari film dengan keyword '{keyword}'...")
     driver = None
     try:
         driver = build_driver()
-        driver.get(f"{BASE_DOMAIN}/?s={keyword}")
-        time.sleep(10)
+        search_query = keyword.replace(' ', '+')
+        driver.get(f"{BASE_DOMAIN}/search?s={search_query}")
+        time.sleep(3)
         page_source = driver.page_source
         
         soup = BeautifulSoup(page_source, 'html.parser')
         movies = []
         for article in soup.select('.post-item, article, .item-series, .film-item'):
-            title_elem = article.find('h2') or article.find('h3') or article.find('a')
+            title_elem = article.find('h2') or article.find('h3') or article.find('a', title=True)
             link_elem = article.find('a', href=True)
             if title_elem and link_elem:
-                movies.append({'title': title_elem.get_text(strip=True), 'url': link_elem['href']})
+                title = title_elem.get_text(strip=True)
+                if not title and title_elem.has_attr('title'):
+                    title = title_elem['title']
+                if title and link_elem['href'].startswith(BASE_DOMAIN):
+                    movies.append({'title': title, 'url': link_elem['href']})
         
-        if not movies:
+        # Hapus duplikat
+        unique_movies = []
+        seen_urls = set()
+        for m in movies:
+            if m['url'] not in seen_urls:
+                unique_movies.append(m)
+                seen_urls.add(m['url'])
+                
+        if not unique_movies:
             print("❌ Tidak ada film ditemukan.")
-            return
+            return None
             
-        print(f"\n✅ Ditemukan {len(movies)} hasil pencarian:\n")
-        for i, m in enumerate(movies[:20], 1):
+        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
+        for i, m in enumerate(unique_movies[:20], 1):
             print(f"[{i}] {m['title'][:70]}")
             
-        choice = int(input("\n👉 Pilih nomor film (0 untuk batal): "))
-        if choice == 0: return
-        
-        selected = movies[choice-1]
+        choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
+        try:
+            choice = int(choice)
+        except ValueError:
+            choice = 0
+            
+        if choice <= 0 or choice > len(unique_movies):
+            return None
+            
+        selected = unique_movies[choice-1]
         slug = selected['url'].rstrip('/').split('/')[-1]
+        download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
         
-        print("\n🎉 DOWNLOAD LINK BERHASIL DIBUAT!")
-        print(f"📥 Download Link: {DOWNLOAD_DOMAIN}/{slug}")
+        print("\n🎉 LINK DOWNLOAD BERHASIL DIRAKIT!")
+        print("👇 KLIK LINK DI BAWAH INI UNTUK MENYIMPANNYA KE GOOGLE DRIVE ANDA 👇")
+        print(f"📥 {download_url}")
+        print("-" * 50)
+        
+        # 1. Catat semua file mp4 sebelum user mendownload
+        old_files = set(search_mp4_files(SEARCH_DIR))
+        
+        # 2. Pantau Google Drive
+        print("\n⏳ Bot sedang memantau folder Google Drive Anda...")
+        print("   Silakan KLIK link di atas, dan pilih 'Tetap Download' di halaman Google.")
+        print("   Bot akan mendeteksi otomatis jika file sudah masuk...\n")
+        
+        while True:
+            time.sleep(3)
+            current_files = set(search_mp4_files(SEARCH_DIR))
+            new_files = current_files - old_files
+            
+            if new_files:
+                # Ambil file terbaru dari file-file baru yang muncul
+                new_file = sorted(list(new_files), key=lambda f: f.stat().st_mtime, reverse=True)[0]
+                print(f"🔔 File baru terdeteksi: {new_file.name}")
+                print("   Memastikan proses save/download selesai 100%...")
+                
+                # Pastikan ukuran file stabil (tidak sedang di-copy setengah-setengah)
+                last_size = -1
+                while True:
+                    time.sleep(3)
+                    current_size = new_file.stat().st_size
+                    if current_size == last_size and current_size > 0:
+                        break
+                    last_size = current_size
+                    
+                print("✅ File sudah utuh dan siap diproses!")
+                return new_file
+                
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error saat pencarian: {e}")
+        return None
     finally:
         if driver: driver.quit()
 
@@ -249,7 +305,6 @@ def upload_via_browser(file_path: str) -> str | None:
         logging.info('Mencari input file...')
         file_input = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="file"], input[name="files[]"]')))
         
-        # Buat elemen terlihat
         driver.execute_script('arguments[0].style.display = "block"; arguments[0].removeAttribute("hidden");', file_input)
         
         logging.info('Mengirim file path ke input...')
@@ -258,7 +313,6 @@ def upload_via_browser(file_path: str) -> str | None:
         logging.info('Mencari tombol submit...')
         submit_button = driver.find_element(By.CSS_SELECTOR, 'input[type=submit], button[type=submit]')
         
-        # Eksekusi Submit
         execute_script_with_retry(driver, 'arguments[0].click();', submit_button)
         logging.info('Upload dimulai, menunggu hasil...')
         
@@ -269,27 +323,21 @@ def upload_via_browser(file_path: str) -> str | None:
             try:
                 url = driver.current_url.lower()
                 
-                # JIKA BROWSER DIARAHKAN KE HALAMAN UPLOAD.PHP / HASIL
                 if url and 'desu.si/' in url and url != UPLOAD_URL.lower():
                     try:
-                        # Sapu Jagat: Ambil seluruh isi teks di body
                         body_text = driver.find_element(By.TAG_NAME, 'body').text
                         body_text_clean = body_text.replace('\\/', '/')
                         
-                        # Deteksi penolakan server (seperti 403 Forbidden)
                         if '403 forbidden' in body_text.lower() or 'error' in body_text.lower():
                             logging.error('Server menolak file: %s', body_text)
                             return None
 
-                        # Cari URL .mp4 secara spesifik
                         match = re.search(r'(https?://[^\s"\'<>\[\]]+\.mp4)', body_text_clean)
                         if match:
                             return match.group(1)
-                            
                     except Exception:
                         pass
                 
-                # FALLBACK: Jika tidak redirect, cek HTML halaman saat ini
                 page = execute_script_with_retry(driver, 'return document.documentElement.outerHTML;')
                 if page:
                     page_clean = page.replace('\\/', '/')
@@ -323,15 +371,12 @@ def play_on_watchparty(video_link: str, room_url: str):
         wait = WebDriverWait(driver, 20)
 
         logging.info('🔍 Mencari kolom input URL...')
-        # Logika Tingkat Tinggi: Menggunakan XPath berbasis Placeholder (Anti-Rapuh)
         input_selector = "input[placeholder*='Enter video file URL']"
         input_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, input_selector)))
         
-        # Pastikan elemen bisa diklik
         wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, input_selector)))
 
         logging.info('🧹 Membersihkan kolom input (React Bypass)...')
-        # Simulasi Ctrl+A lalu Backspace untuk memastikan React mendeteksi perubahan state
         input_box.send_keys(Keys.CONTROL, 'a')
         input_box.send_keys(Keys.BACKSPACE)
         time.sleep(0.5)
@@ -342,7 +387,6 @@ def play_on_watchparty(video_link: str, room_url: str):
         input_box.send_keys(Keys.ENTER)
 
         logging.info('🎬 SUKSES! Video diputar di WatchParty. Bot keluar dari room...')
-        # Tunggu 3 detik agar sinyal perintah sampai ke server WatchParty sebelum bot ditutup
         time.sleep(3) 
 
     except Exception as exc:
@@ -352,27 +396,41 @@ def play_on_watchparty(video_link: str, room_url: str):
             driver.quit()
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ('--movie-search', '-m', '--search', '--search-upload', '-su'):
-        search_movie_and_generate_download_link()
-        if sys.argv[1] not in ('--search-upload', '-su'):
-            return
-        input("\n⏳ Press Enter once you have saved the movie to your Google Drive...")
-
     if not check_google_drive():
         sys.exit(1)
 
-    mp4_files = search_mp4_files(SEARCH_DIR)
-    if not mp4_files:
-        logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
-        sys.exit(1)
+    print("\n" + "="*55)
+    print("🚀 ULTIMATE AUTO-STREAMING BOT")
+    print("   (LK21 -> Google Drive -> desu.si -> WatchParty)")
+    print("="*55)
+    print("[1] 🔍 Cari & Download dari LK21 (Full Otomatis)")
+    print("[2] 📂 Pilih File MP4 yang sudah ada di Google Drive")
+    print("="*55)
+    
+    choice = input("👉 Pilih menu (1/2): ").strip()
+    
+    file_path = None
+    if choice == '1':
+        file_path = run_auto_lk21_flow()
+        if not file_path:
+            print("❌ Proses dibatalkan.")
+            return
+    elif choice == '2':
+        mp4_files = search_mp4_files(SEARCH_DIR)
+        if not mp4_files:
+            logging.error('Tidak ada file MP4 yang ditemukan di Google Drive.')
+            sys.exit(1)
 
-    print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
-    for i, path in enumerate(mp4_files, start=1):
-        size_mb = path.stat().st_size / (1024 * 1024)
-        print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
+        print('\n✅ Ditemukan %d file MP4 di Google Drive:\n' % len(mp4_files))
+        for i, path in enumerate(mp4_files, start=1):
+            size_mb = path.stat().st_size / (1024 * 1024)
+            print(f'[{i}] {path.name} ({size_mb:.2f} MB)')
 
-    print('\n' + '-' * 50)
-    file_path = choose_file(mp4_files)
+        print('\n' + '-' * 50)
+        file_path = choose_file(mp4_files)
+    else:
+        print("❌ Pilihan tidak valid.")
+        return
 
     try:
         verify_file(file_path)
@@ -380,9 +438,9 @@ def main():
         logging.error(exc)
         sys.exit(1)
 
-    logging.info(f'File yang dipilih: {file_path}')
+    logging.info(f'\n🚀 Memulai proses unggah untuk: {file_path.name}')
     
-    # LANGSUNG UPLOAD
+    # PROSES UPLOAD
     link = upload_via_browser(str(file_path))
     
     # CEK KEAMANAN SEBELUM MENGHAPUS
@@ -390,15 +448,14 @@ def main():
         print('\n🎉 UPLOAD BERHASIL!')
         print(f'📥 Direct download: {link}')
         
-        # ----- TRIGGER AUTOPILOT WATCHPARTY -----
-        room_url = "https://www.watchparty.me/watch/fantastic-receipt-move"
-        play_on_watchparty(link, room_url)
-        # ----------------------------------------
+        # PROSES PLAY KE WATCHPARTY
+        play_on_watchparty(link, ROOM_URL)
         
-        # EKSEKUSI HAPUS FILE (AMAN)
+        # PROSES HAPUS FILE ASLI (AMAN)
         try:
             file_path.unlink()
-            print(f'\n✅ File asli di Google Drive berhasil dihapus: {file_path.name}')
+            print(f'\n🗑️ File asli di Google Drive berhasil dihapus: {file_path.name}')
+            print('✅ Skenario Ultimate selesai dengan sempurna!')
         except Exception as e:
             print(f'\n⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
     else:
