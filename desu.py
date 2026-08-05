@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-LK21 Search (Sapu Jagat) -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
+Auto-Resolve Domain -> LK21 Search (Sapu Jagat) -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
 """
 
 import logging
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -183,6 +184,7 @@ def run_auto_lk21_flow() -> Path | None:
         print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
         return None
     
+    # Base Domain Default (Bisa berupa root atau subdomain lama)
     BASE_DOMAIN = "https://tv12.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
@@ -194,12 +196,27 @@ def run_auto_lk21_flow() -> Path | None:
     if not keyword:
         return None
     
-    print(f"\n🔍 Mencari film dengan keyword '{keyword}'...")
+    print(f"\n🔍 Menghubungkan ke server LK21...")
     driver = None
     try:
         driver = build_driver()
+        
+        # --- LOGIKA TINGKAT TINGGI: AUTO-RESOLVE DYNAMIC DOMAIN ---
+        # Bot memancing server untuk mengetahui apakah ada redirect ke subdomain baru
+        driver.get(BASE_DOMAIN)
+        time.sleep(4) # Waktu tunggu agar redirect HTTP/Cloudflare selesai
+        
+        parsed_url = urlparse(driver.current_url)
+        ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
+        
+        if ACTIVE_DOMAIN != BASE_DOMAIN:
+            print(f"🔄 Auto-Redirect Terdeteksi! Skrip beradaptasi ke domain baru: {ACTIVE_DOMAIN}")
+        else:
+            print(f"✅ Domain stabil: {ACTIVE_DOMAIN}")
+            
+        print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
         search_query = keyword.replace(' ', '+')
-        driver.get(f"{BASE_DOMAIN}/search?s={search_query}")
+        driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
         time.sleep(3)
         page_source = driver.page_source
         
@@ -207,7 +224,6 @@ def run_auto_lk21_flow() -> Path | None:
         movies = []
         
         # --- LOGIKA TINGKAT TINGGI: SELEKTOR SAPU JAGAT ---
-        # Mencari seluruh link yang valid tanpa harus berpatokan pada base domain
         for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
             title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
             link_elem = article.find('a', href=True)
