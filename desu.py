@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-LK21 Search -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
+LK21 Search (Sapu Jagat) -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
 """
 
 import logging
@@ -101,7 +101,6 @@ def install_google_chrome() -> bool:
 def build_driver():
     options = Options()
     
-    # Mode Headless Modern
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
@@ -180,7 +179,6 @@ def check_google_drive() -> bool:
     return True
 
 def run_auto_lk21_flow() -> Path | None:
-    """Logika Tingkat Tinggi: Scraping LK21 -> Beri Link -> Pantau Folder Drive"""
     if requests is None or BeautifulSoup is None:
         print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
         return None
@@ -207,17 +205,21 @@ def run_auto_lk21_flow() -> Path | None:
         
         soup = BeautifulSoup(page_source, 'html.parser')
         movies = []
-        for article in soup.select('.post-item, article, .item-series, .film-item'):
-            title_elem = article.find('h2') or article.find('h3') or article.find('a', title=True)
+        
+        # --- LOGIKA TINGKAT TINGGI: SELEKTOR SAPU JAGAT ---
+        # Mencari seluruh link yang valid tanpa harus berpatokan pada base domain
+        for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
+            title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
             link_elem = article.find('a', href=True)
             if title_elem and link_elem:
                 title = title_elem.get_text(strip=True)
                 if not title and title_elem.has_attr('title'):
                     title = title_elem['title']
-                if title and link_elem['href'].startswith(BASE_DOMAIN):
-                    movies.append({'title': title, 'url': link_elem['href']})
+                
+                href = link_elem['href']
+                if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
+                    movies.append({'title': title, 'url': href})
         
-        # Hapus duplikat
         unique_movies = []
         seen_urls = set()
         for m in movies:
@@ -226,35 +228,39 @@ def run_auto_lk21_flow() -> Path | None:
                 seen_urls.add(m['url'])
                 
         if not unique_movies:
-            print("❌ Tidak ada film ditemukan.")
-            return None
+            print("❌ Bot tidak menemukan film secara otomatis (Mungkin diblokir Cloudflare).")
+            # --- JARING PENGAMAN (FALLBACK) ---
+            manual_link = input("👉 Tempel/Paste link film LK21-nya secara manual (atau tekan Enter untuk batal): ").strip()
+            if not manual_link:
+                return None
+            slug = manual_link.rstrip('/').split('/')[-1]
+            download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
             
-        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
-        for i, m in enumerate(unique_movies[:20], 1):
-            print(f"[{i}] {m['title'][:70]}")
-            
-        choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
-        try:
-            choice = int(choice)
-        except ValueError:
-            choice = 0
-            
-        if choice <= 0 or choice > len(unique_movies):
-            return None
-            
-        selected = unique_movies[choice-1]
-        slug = selected['url'].rstrip('/').split('/')[-1]
-        download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
+        else:
+            print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
+            for i, m in enumerate(unique_movies[:20], 1):
+                print(f"[{i}] {m['title'][:70]}")
+                
+            choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
+            try:
+                choice = int(choice)
+            except ValueError:
+                choice = 0
+                
+            if choice <= 0 or choice > len(unique_movies):
+                return None
+                
+            selected = unique_movies[choice-1]
+            slug = selected['url'].rstrip('/').split('/')[-1]
+            download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
         
         print("\n🎉 LINK DOWNLOAD BERHASIL DIRAKIT!")
         print("👇 KLIK LINK DI BAWAH INI UNTUK MENYIMPANNYA KE GOOGLE DRIVE ANDA 👇")
         print(f"📥 {download_url}")
         print("-" * 50)
         
-        # 1. Catat semua file mp4 sebelum user mendownload
         old_files = set(search_mp4_files(SEARCH_DIR))
         
-        # 2. Pantau Google Drive
         print("\n⏳ Bot sedang memantau folder Google Drive Anda...")
         print("   Silakan KLIK link di atas, dan pilih 'Tetap Download' di halaman Google.")
         print("   Bot akan mendeteksi otomatis jika file sudah masuk...\n")
@@ -265,12 +271,10 @@ def run_auto_lk21_flow() -> Path | None:
             new_files = current_files - old_files
             
             if new_files:
-                # Ambil file terbaru dari file-file baru yang muncul
                 new_file = sorted(list(new_files), key=lambda f: f.stat().st_mtime, reverse=True)[0]
                 print(f"🔔 File baru terdeteksi: {new_file.name}")
                 print("   Memastikan proses save/download selesai 100%...")
                 
-                # Pastikan ukuran file stabil (tidak sedang di-copy setengah-setengah)
                 last_size = -1
                 while True:
                     time.sleep(3)
@@ -440,18 +444,14 @@ def main():
 
     logging.info(f'\n🚀 Memulai proses unggah untuk: {file_path.name}')
     
-    # PROSES UPLOAD
     link = upload_via_browser(str(file_path))
     
-    # CEK KEAMANAN SEBELUM MENGHAPUS
     if link and 'desu.si' in link and link.endswith('.mp4'):
         print('\n🎉 UPLOAD BERHASIL!')
         print(f'📥 Direct download: {link}')
         
-        # PROSES PLAY KE WATCHPARTY
         play_on_watchparty(link, ROOM_URL)
         
-        # PROSES HAPUS FILE ASLI (AMAN)
         try:
             file_path.unlink()
             print(f'\n🗑️ File asli di Google Drive berhasil dihapus: {file_path.name}')
