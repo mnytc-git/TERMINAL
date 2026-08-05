@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Upload file besar ke desu.si menggunakan browser automation.
+Otomatis memutar video di WatchParty setelah berhasil.
 Otomatis MENGHAPUS file lokal/Drive HANYA jika link valid (.mp4) berhasil didapatkan.
 """
 
@@ -26,6 +27,7 @@ try:
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support import expected_conditions as EC
     from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.common.keys import Keys
 except ImportError:
     logging.error("Selenium belum terpasang. Jalankan: pip install selenium")
     sys.exit(1)
@@ -177,7 +179,6 @@ def check_google_drive() -> bool:
         return False
     return True
 
-# FUNGSI SCRAPING LK21 TETAP DIPERTAHANKAN
 def search_movie_and_generate_download_link():
     if requests is None or BeautifulSoup is None:
         print("❌ requests/beautifulsoup4 tidak tersedia.")
@@ -313,6 +314,43 @@ def upload_via_browser(file_path: str) -> str | None:
         if driver:
             driver.quit()
 
+def play_on_watchparty(video_link: str, room_url: str):
+    logging.info('\n🤖 [AUTO-PLAY] Menghubungkan ke WatchParty Room...')
+    driver = None
+    try:
+        driver = build_driver()
+        driver.get(room_url)
+        wait = WebDriverWait(driver, 20)
+
+        logging.info('🔍 Mencari kolom input URL...')
+        # Logika Tingkat Tinggi: Menggunakan XPath berbasis Placeholder (Anti-Rapuh)
+        input_selector = "input[placeholder*='Enter video file URL']"
+        input_box = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, input_selector)))
+        
+        # Pastikan elemen bisa diklik
+        wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, input_selector)))
+
+        logging.info('🧹 Membersihkan kolom input (React Bypass)...')
+        # Simulasi Ctrl+A lalu Backspace untuk memastikan React mendeteksi perubahan state
+        input_box.send_keys(Keys.CONTROL, 'a')
+        input_box.send_keys(Keys.BACKSPACE)
+        time.sleep(0.5)
+
+        logging.info('🔗 Memasukkan link dan menekan ENTER...')
+        input_box.send_keys(video_link)
+        time.sleep(0.5)
+        input_box.send_keys(Keys.ENTER)
+
+        logging.info('🎬 SUKSES! Video diputar di WatchParty. Bot keluar dari room...')
+        # Tunggu 3 detik agar sinyal perintah sampai ke server WatchParty sebelum bot ditutup
+        time.sleep(3) 
+
+    except Exception as exc:
+        logging.error('Gagal memutar video di WatchParty: %s', exc)
+    finally:
+        if driver:
+            driver.quit()
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ('--movie-search', '-m', '--search', '--search-upload', '-su'):
         search_movie_and_generate_download_link()
@@ -344,23 +382,25 @@ def main():
 
     logging.info(f'File yang dipilih: {file_path}')
     
-    # LANGSUNG UPLOAD TANPA MENU WATCHPARTY
+    # LANGSUNG UPLOAD
     link = upload_via_browser(str(file_path))
     
     # CEK KEAMANAN SEBELUM MENGHAPUS
-    # 1. Link harus ada
-    # 2. Link harus mengandung kata desu.si
-    # 3. Link harus berakhiran .mp4
     if link and 'desu.si' in link and link.endswith('.mp4'):
         print('\n🎉 UPLOAD BERHASIL!')
         print(f'📥 Direct download: {link}')
         
+        # ----- TRIGGER AUTOPILOT WATCHPARTY -----
+        room_url = "https://www.watchparty.me/watch/fantastic-receipt-move"
+        play_on_watchparty(link, room_url)
+        # ----------------------------------------
+        
         # EKSEKUSI HAPUS FILE (AMAN)
         try:
             file_path.unlink()
-            print(f'✅ File asli di Google Drive berhasil dihapus: {file_path.name}')
+            print(f'\n✅ File asli di Google Drive berhasil dihapus: {file_path.name}')
         except Exception as e:
-            print(f'⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
+            print(f'\n⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
     else:
         print('\n❌ Upload gagal, diblokir server, atau link tidak valid.')
         print(f'⚠️ File "{file_path.name}" TIDAK dihapus dari Google Drive demi keamanan.')
