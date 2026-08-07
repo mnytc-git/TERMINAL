@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-3-Tier Search (Radar/Direct/Manual) -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
+Hardware Spoofing -> 3-Tier Search -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
 """
 
 import logging
@@ -154,12 +154,30 @@ def build_driver(proxy_server=None):
     service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=options)
     
-    # --- INJEKSI SCRIPT CDP (Menghapus jejak webdriver) ---
+    # --- LOGIKA TINGKAT TINGGI: BIOMETRIC & HARDWARE SPOOFING (CDP) ---
+    # Memanipulasi inti browser agar lolos dari tes sidik jari (Fingerprinting) Cloudflare & Nginx
     driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
         'source': '''
-            Object.defineProperty(navigator, 'webdriver', {
-              get: () => undefined
-            })
+            // Hapus jejak bot
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            
+            // Palsukan Plugins (Headless biasanya tidak punya plugins)
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            
+            // Palsukan Bahasa (Headless biasanya kaku)
+            Object.defineProperty(navigator, 'languages', { get: () => ['id-ID', 'id', 'en-US', 'en'] });
+            
+            // Palsukan Keberadaan Chrome Global Object
+            window.chrome = { runtime: {} };
+            
+            // Memalsukan Hardware VGA (WebGL Spoofing)
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                // 37445 = Vendor, 37446 = Renderer
+                if (parameter === 37445) return 'Intel Inc.';
+                if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics';
+                return getParameter.apply(this, arguments);
+            };
         '''
     })
 
@@ -425,8 +443,11 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
         logging.info('Navigasi ke desu.si...')
         driver.get(UPLOAD_URL)
         
-        logging.info('⏳ Menunggu 10 detik agar sistem keamanan (WAF/Cloudflare) di server mendaftarkan sesi kita...')
-        time.sleep(10) 
+        # --- LOGIKA TINGKAT TINGGI: HUMAN DELAY JITTER ---
+        # Menunggu dengan waktu acak (bukan 10 detik kaku) agar terlihat natural
+        delay_time = round(random.uniform(9.3, 14.7), 1)
+        logging.info(f'⏳ Menunggu {delay_time} detik agar sistem keamanan (WAF/Cloudflare) merekam aktivitas natural...')
+        time.sleep(delay_time) 
         
         wait = WebDriverWait(driver, 30)
 
