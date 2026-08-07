@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Smart Proxy Rotator -> Stealth Mode -> Auto-Resolve Domain -> LK21 Search -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
+Smart Proxy Rotator (Memory+Shuffle) -> WebRTC Killer -> Stealth Mode -> LK21 Search -> Auto Detect New File -> Upload desu.si -> WatchParty -> Auto Delete
 """
 
 import logging
@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import time
+import random
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -109,7 +110,17 @@ def build_driver(proxy_server=None):
     options.add_argument('--mute-audio')
     options.add_argument('--window-size=1920,1080')
     
-    # --- LOGIKA TINGKAT TINGGI: PROXY INJECTION ---
+    # --- LOGIKA TINGKAT TINGGI: WEBRTC LEAK KILLER & PROXY ---
+    # Jika kita pakai proxy, pastikan WebRTC tidak membocorkan IP Asli Datacenter
+    prefs = {
+        "profile.default_content_setting_values.webrtc_multiple_routes_enable": 0,
+        "webrtc.ip_handling_policy": "disable_non_proxied_udp",
+        "webrtc.multiple_routes_enabled": False,
+        "webrtc.nonproxied_udp_enabled": False
+    }
+    options.add_experimental_option("prefs", prefs)
+    options.add_argument('--disable-webrtc')
+
     if proxy_server:
         options.add_argument(f'--proxy-server=http://{proxy_server}')
         logging.info(f"🛡️ Menjalankan Browser dengan IP Proxy Publik: {proxy_server}")
@@ -200,8 +211,8 @@ def check_google_drive() -> bool:
         return False
     return True
 
-# --- LOGIKA TINGKAT TINGGI: API PROXY SCRAPER OTOMATIS ---
-def get_safe_proxy():
+# --- LOGIKA TINGKAT TINGGI: PROXY MEMORY & SHUFFLE ---
+def get_safe_proxy(exclude_list):
     if requests is None:
         return None
     logging.info('🔄 [ANTI-BLOKIR] Mencari daftar IP Proxy Elite dari server global...')
@@ -212,11 +223,17 @@ def get_safe_proxy():
         if not proxies or not proxies[0]:
             return None
             
-        logging.info(f'✅ Mendapatkan {len(proxies)} IP Proxy. Menguji kecepatan dan bypass tembok desu.si...')
-        for proxy in proxies[:15]:  # Uji maksimal 15 proxy tercepat
+        # Acak urutan proxy agar tidak mencoba IP yang sama terus-menerus
+        valid_proxies = [p for p in proxies if p not in exclude_list and len(p.split(':')) == 2]
+        random.shuffle(valid_proxies)
+        
+        logging.info(f'✅ Mendapatkan {len(valid_proxies)} IP Proxy baru. Menguji kecepatan dan bypass tembok desu.si...')
+        
+        for proxy in valid_proxies[:15]: 
             try:
                 proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
-                test = requests.get(UPLOAD_URL, proxies=proxies_dict, timeout=5)
+                # Gunakan POST agar tes lebih realistis dengan form upload
+                test = requests.get(UPLOAD_URL, proxies=proxies_dict, timeout=6)
                 if test.status_code == 200:
                     logging.info(f'✅ IP Aman Ditemukan dan Valid: {proxy}')
                     return proxy
@@ -364,7 +381,6 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
         logging.info('Navigasi ke desu.si...')
         driver.get(UPLOAD_URL)
         
-        # --- FIX: JEDA HUMAN-DELAY UNTUK CLOUDFLARE ---
         logging.info('⏳ Menunggu 10 detik agar sistem keamanan (WAF/Cloudflare) di server mendaftarkan sesi kita...')
         time.sleep(10) 
         
@@ -396,7 +412,6 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
                         body_text = driver.find_element(By.TAG_NAME, 'body').text
                         body_text_clean = body_text.replace('\\/', '/')
                         
-                        # --- DETEKSI BLOKIR KHUSUS ---
                         if '403 forbidden' in body_text.lower() or 'error' in body_text.lower():
                             logging.error('Server menolak file (403 Forbidden). IP kemungkinan di-blacklist.')
                             return "403_BLOCKED"
@@ -431,24 +446,28 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
         if driver:
             driver.quit()
 
-# --- FUNGSI RETRY DENGAN PROXY ---
 def smart_upload(file_path: str) -> str | None:
-    # Percobaan Pertama (Langsung, dengan jeda Cloudflare yang sudah diperbaiki)
+    # Percobaan Pertama (Langsung, dengan jeda Cloudflare)
     link = upload_via_browser(file_path, proxy_ip=None)
     
-    # Percobaan Kedua (Jika Percobaan Pertama terkena 403 Forbidden Instan)
+    # Percobaan Kedua (Dengan IP Rotator dan Memory Blacklist)
     if link == "403_BLOCKED":
         logging.warning("⚠️ Server secara aktif memblokir IP Datacenter kita.")
-        logging.warning("🚀 Mengaktifkan Mode Jaringan Bypass (IP Rotator)...")
+        logging.warning("🚀 Mengaktifkan Mode Jaringan Bypass (IP Rotator + WebRTC Kill)...")
         
-        for attempt in range(3): # Coba 3 IP Proxy berbeda jika diperlukan
+        used_proxies = set()
+        
+        # Tambahkan batas percobaan hingga 5 proxy berbeda jika diperlukan
+        for attempt in range(5): 
             logging.info(f"\n🔄 --- MEMULAI PERCOBAAN PROXY KE-{attempt + 1} ---")
-            safe_proxy = get_safe_proxy()
+            safe_proxy = get_safe_proxy(exclude_list=used_proxies)
             
             if not safe_proxy:
-                logging.error("❌ Gagal mendapatkan Proxy yang aman. Melewati percobaan ini.")
-                continue
+                logging.error("❌ Gagal mendapatkan Proxy baru yang aman. Server Proxy mungkin habis.")
+                break
                 
+            used_proxies.add(safe_proxy) # Simpan IP ke dalam ingatan agar tidak dipakai lagi
+            
             link = upload_via_browser(file_path, proxy_ip=safe_proxy)
             if link and link != "403_BLOCKED":
                 return link
@@ -462,7 +481,7 @@ def play_on_watchparty(video_link: str, room_url: str):
     logging.info('\n🤖 [AUTO-PLAY] Menghubungkan ke WatchParty Room...')
     driver = None
     try:
-        driver = build_driver() # Tidak butuh proxy untuk WatchParty
+        driver = build_driver()
         driver.get(room_url)
         wait = WebDriverWait(driver, 20)
 
@@ -536,7 +555,6 @@ def main():
 
     logging.info(f'\n🚀 Memulai proses unggah untuk: {file_path.name}')
     
-    # --- MENGGUNAKAN SMART UPLOAD (ROTATOR IP) ---
     link = smart_upload(str(file_path))
     
     if link and 'desu.si' in link and link.endswith('.mp4'):
