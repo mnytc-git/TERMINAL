@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Radar Satelit (Dorking) -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
+3-Tier Search (Radar/Direct/Manual) -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
 """
 
 import logging
@@ -14,6 +14,7 @@ import time
 import random
 import urllib.parse
 from pathlib import Path
+from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,6 +111,7 @@ def build_driver(proxy_server=None):
     options.add_argument('--mute-audio')
     options.add_argument('--window-size=1920,1080')
     
+    # --- LOGIKA TINGKAT TINGGI: WEBRTC LEAK KILLER ---
     prefs = {
         "profile.default_content_setting_values.webrtc_multiple_routes_enable": 0,
         "webrtc.ip_handling_policy": "disable_non_proxied_udp",
@@ -119,10 +121,12 @@ def build_driver(proxy_server=None):
     options.add_experimental_option("prefs", prefs)
     options.add_argument('--disable-webrtc')
 
+    # --- INJEKSI PROXY ---
     if proxy_server:
         options.add_argument(f'--proxy-server=http://{proxy_server}')
         logging.info(f"🛡️ Menjalankan Browser dengan IP Proxy Publik: {proxy_server}")
 
+    # --- LOGIKA TINGKAT TINGGI: STEALTH MODE ANTI-BOT ---
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -150,6 +154,7 @@ def build_driver(proxy_server=None):
     service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=options)
     
+    # --- INJEKSI SCRIPT CDP (Menghapus jejak webdriver) ---
     driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
         'source': '''
             Object.defineProperty(navigator, 'webdriver', {
@@ -207,6 +212,7 @@ def check_google_drive() -> bool:
         return False
     return True
 
+# --- LOGIKA TINGKAT TINGGI: PROXY MEMORY & SHUFFLE ---
 def get_safe_proxy(exclude_list):
     if requests is None:
         return None
@@ -236,16 +242,14 @@ def get_safe_proxy(exclude_list):
         logging.error(f"Gagal mengambil proxy: {e}")
     return None
 
-# --- LOGIKA TINGKAT TINGGI: RADAR SATELIT (DORKING) ---
+# --- LAPIS 1: RADAR SATELIT (DORKING) ---
 def dork_search_lk21(keyword: str) -> list:
-    """Menggunakan DuckDuckGo untuk mencari di LK21 tanpa menyentuh Cloudflare LK21 sama sekali."""
-    logging.info("🛰️ [RADAR SATELIT] Mengekstraksi database LK21 via Search Engine Dorking (Bypass Cloudflare)...")
+    logging.info("🛰️ [LAPIS 1] Mengekstraksi database LK21 via Search Engine Dorking (Bypass Cloudflare)...")
     search_url = "https://html.duckduckgo.com/html/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Content-Type": "application/x-www-form-urlencoded"
     }
-    # Mencari di root domain agar kebal terhadap perubahan subdomain (tv12, tv24, dll)
     data = {"q": f"site:lk21official.cc {keyword}"}
     
     try:
@@ -258,18 +262,15 @@ def dork_search_lk21(keyword: str) -> list:
         for a in soup.find_all('a', class_='result__url'):
             href = a.get('href', '')
             if 'lk21official.cc' in href:
-                # Bersihkan URL dari pelacak DuckDuckGo
                 if 'uddg=' in href:
                     parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
                     if 'uddg' in parsed:
                         href = parsed['uddg'][0]
                         
-                # Hindari link kategori, halaman pencarian, atau aktor
                 if any(x in href for x in ['/genre/', '/country/', '/year/', '/search/', '/aktor/', '?s=']):
                     continue
                     
                 if href not in seen:
-                    # Ambil judul yang rapi dari struktur URL (Slug)
                     title = href.rstrip('/').split('/')[-1].replace('-', ' ').title()
                     movies.append({'title': title, 'url': href})
                     seen.add(href)
@@ -281,32 +282,89 @@ def dork_search_lk21(keyword: str) -> list:
 
 def run_auto_lk21_flow() -> Path | None:
     if requests is None or BeautifulSoup is None:
-        print("❌ requests/beautifulsoup4 tidak tersedia.")
+        print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
         return None
     
+    BASE_DOMAIN = "https://tv12.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
     print("\n" + "="*50)
-    print("🎬 LK21 SEARCH & AUTO-DETECTOR (STEALTH MODE)")
+    print("🎬 LK21 SEARCH & AUTO-DETECTOR (3-TIER SYSTEM)")
     print("="*50)
     
     keyword = input("👉 Masukkan judul film (Contoh: Evil Dead Rise): ").strip()
     if not keyword:
         return None
         
-    # Eksekusi Radar Satelit
+    unique_movies = []
+
+    # === EKSEKUSI LAPIS 1 (RADAR SATELIT) ===
     unique_movies = dork_search_lk21(keyword)
-            
+    
+    # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH - KODE UTUH) ===
     if not unique_movies:
-        print("❌ Pencarian satelit tidak menemukan film (Pastikan judul benar, misalnya 'Evil Dead Rise' bukan 'Evil Dead Burn').")
-        manual_link = input("👉 Tempel/Paste link film LK21-nya secara manual (atau tekan Enter untuk batal): ").strip()
+        print("\n❌ Radar Satelit gagal atau kosong. Beralih ke Lapis 2: Direct Selenium Search...")
+        driver = None
+        try:
+            driver = build_driver()
+            
+            driver.get(BASE_DOMAIN)
+            print("⏳ Menunggu verifikasi Cloudflare (jika ada)...")
+            time.sleep(8) 
+            
+            parsed_url = urlparse(driver.current_url)
+            ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            
+            if ACTIVE_DOMAIN != BASE_DOMAIN:
+                print(f"🔄 Auto-Redirect Terdeteksi! Skrip beradaptasi ke domain baru: {ACTIVE_DOMAIN}")
+            else:
+                print(f"✅ Domain stabil: {ACTIVE_DOMAIN}")
+                
+            print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
+            search_query = keyword.replace(' ', '+')
+            driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
+            
+            time.sleep(5)
+            page_source = driver.page_source
+            
+            soup = BeautifulSoup(page_source, 'html.parser')
+            movies = []
+            
+            # SELEKTOR SAPU JAGAT LAMA
+            for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
+                title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
+                link_elem = article.find('a', href=True)
+                if title_elem and link_elem:
+                    title = title_elem.get_text(strip=True)
+                    if not title and title_elem.has_attr('title'):
+                        title = title_elem['title']
+                    
+                    href = link_elem['href']
+                    if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
+                        movies.append({'title': title, 'url': href})
+            
+            seen_urls = set()
+            for m in movies:
+                if m['url'] not in seen_urls:
+                    unique_movies.append(m)
+                    seen_urls.add(m['url'])
+
+        except Exception as e:
+            print(f"❌ Error saat Selenium Search: {e}")
+        finally:
+            if driver: driver.quit()
+
+    # === EKSEKUSI LAPIS 3 (MANUAL FALLBACK) ===
+    if not unique_movies:
+        print("\n❌ Lapis 1 & Lapis 2 diblokir oleh sistem keamanan Cloudflare LK21.")
+        manual_link = input("👉 (LAPIS 3) Tempel/Paste link film LK21-nya secara manual (atau Enter untuk batal): ").strip()
         if not manual_link:
             return None
         slug = manual_link.rstrip('/').split('/')[-1]
         download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
         
     else:
-        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian instan:\n")
+        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
         for i, m in enumerate(unique_movies[:20], 1):
             print(f"[{i}] {m['title'][:70]}")
             
@@ -464,7 +522,7 @@ def play_on_watchparty(video_link: str, room_url: str):
     logging.info('\n🤖 [AUTO-PLAY] Menghubungkan ke WatchParty Room...')
     driver = None
     try:
-        driver = build_driver()
+        driver = build_driver() # Tidak butuh proxy untuk auto-play
         driver.get(room_url)
         wait = WebDriverWait(driver, 20)
 
