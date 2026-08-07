@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Auto-Resolve Domain -> LK21 Search (Sapu Jagat) -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
+Stealth Anti-Block -> Auto-Resolve Domain -> LK21 Search -> Auto Detect New File -> Upload desu.si -> Auto Play WatchParty -> Auto Delete
 """
 
 import logging
@@ -102,12 +102,19 @@ def install_google_chrome() -> bool:
 def build_driver():
     options = Options()
     
+    # --- LOGIKA TINGKAT TINGGI: STEALTH MODE ANTI-CLOUDFLARE ---
     options.add_argument('--headless=new')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
     options.add_argument('--disable-gpu')
     options.add_argument('--mute-audio')
     options.add_argument('--window-size=1920,1080')
+    
+    # Memanipulasi identitas agar terlihat seperti manusia biasa, bukan bot datacenter
+    options.add_argument('--disable-blink-features=AutomationControlled')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
 
     chrome_path = find_chrome_binary()
     if not chrome_path:
@@ -130,6 +137,17 @@ def build_driver():
 
     service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=options)
+    
+    # --- INJEKSI SCRIPT CDP ---
+    # Menghapus jejak "webdriver" dari variabel Javascript di dalam browser
+    driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            Object.defineProperty(navigator, 'webdriver', {
+              get: () => undefined
+            })
+        '''
+    })
+
     driver.set_script_timeout(600)
     driver.implicitly_wait(10)
     
@@ -184,12 +202,11 @@ def run_auto_lk21_flow() -> Path | None:
         print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
         return None
     
-    # Base Domain Default (Bisa berupa root atau subdomain lama)
     BASE_DOMAIN = "https://tv12.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
     print("\n" + "="*50)
-    print("🎬 LK21 SEARCH & AUTO-DETECTOR")
+    print("🎬 LK21 SEARCH & AUTO-DETECTOR (STEALTH MODE)")
     print("="*50)
     
     keyword = input("👉 Masukkan judul film (Contoh: Wonder Woman): ").strip()
@@ -201,10 +218,10 @@ def run_auto_lk21_flow() -> Path | None:
     try:
         driver = build_driver()
         
-        # --- LOGIKA TINGKAT TINGGI: AUTO-RESOLVE DYNAMIC DOMAIN ---
-        # Bot memancing server untuk mengetahui apakah ada redirect ke subdomain baru
+        # Pancing Cloudflare
         driver.get(BASE_DOMAIN)
-        time.sleep(4) # Waktu tunggu agar redirect HTTP/Cloudflare selesai
+        print("⏳ Menunggu verifikasi Cloudflare (jika ada)...")
+        time.sleep(8) # Diperpanjang agar Cloudflare JS Challenge sempat terselesaikan
         
         parsed_url = urlparse(driver.current_url)
         ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
@@ -217,13 +234,15 @@ def run_auto_lk21_flow() -> Path | None:
         print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
         search_query = keyword.replace(' ', '+')
         driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
-        time.sleep(3)
+        
+        # Beri waktu ekstra bagi browser untuk merender hasil setelah by-pass anti-bot
+        time.sleep(5)
         page_source = driver.page_source
         
         soup = BeautifulSoup(page_source, 'html.parser')
         movies = []
         
-        # --- LOGIKA TINGKAT TINGGI: SELEKTOR SAPU JAGAT ---
+        # SELEKTOR SAPU JAGAT
         for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
             title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
             link_elem = article.find('a', href=True)
@@ -244,7 +263,7 @@ def run_auto_lk21_flow() -> Path | None:
                 seen_urls.add(m['url'])
                 
         if not unique_movies:
-            print("❌ Bot tidak menemukan film secara otomatis (Mungkin diblokir Cloudflare).")
+            print("❌ Bot tidak menemukan film (Mungkin keamanan tingkat tinggi memblokir Datacenter IP atau film tidak ada).")
             # --- JARING PENGAMAN (FALLBACK) ---
             manual_link = input("👉 Tempel/Paste link film LK21-nya secara manual (atau tekan Enter untuk batal): ").strip()
             if not manual_link:
