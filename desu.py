@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Smart Proxy Rotator (Memory+Shuffle) -> WebRTC Killer -> Stealth Mode -> LK21 Search -> Auto Detect New File -> Upload desu.si -> WatchParty -> Auto Delete
+Radar Satelit (Dorking) -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
 """
 
 import logging
@@ -12,8 +12,8 @@ import subprocess
 import sys
 import time
 import random
+import urllib.parse
 from pathlib import Path
-from urllib.parse import urlparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -110,8 +110,6 @@ def build_driver(proxy_server=None):
     options.add_argument('--mute-audio')
     options.add_argument('--window-size=1920,1080')
     
-    # --- LOGIKA TINGKAT TINGGI: WEBRTC LEAK KILLER & PROXY ---
-    # Jika kita pakai proxy, pastikan WebRTC tidak membocorkan IP Asli Datacenter
     prefs = {
         "profile.default_content_setting_values.webrtc_multiple_routes_enable": 0,
         "webrtc.ip_handling_policy": "disable_non_proxied_udp",
@@ -125,7 +123,6 @@ def build_driver(proxy_server=None):
         options.add_argument(f'--proxy-server=http://{proxy_server}')
         logging.info(f"🛡️ Menjalankan Browser dengan IP Proxy Publik: {proxy_server}")
 
-    # Memanipulasi identitas agar terlihat seperti manusia biasa
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
@@ -153,7 +150,6 @@ def build_driver(proxy_server=None):
     service = Service(driver_path)
     driver = webdriver.Chrome(service=service, options=options)
     
-    # --- INJEKSI SCRIPT CDP ---
     driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
         'source': '''
             Object.defineProperty(navigator, 'webdriver', {
@@ -211,7 +207,6 @@ def check_google_drive() -> bool:
         return False
     return True
 
-# --- LOGIKA TINGKAT TINGGI: PROXY MEMORY & SHUFFLE ---
 def get_safe_proxy(exclude_list):
     if requests is None:
         return None
@@ -223,7 +218,6 @@ def get_safe_proxy(exclude_list):
         if not proxies or not proxies[0]:
             return None
             
-        # Acak urutan proxy agar tidak mencoba IP yang sama terus-menerus
         valid_proxies = [p for p in proxies if p not in exclude_list and len(p.split(':')) == 2]
         random.shuffle(valid_proxies)
         
@@ -232,7 +226,6 @@ def get_safe_proxy(exclude_list):
         for proxy in valid_proxies[:15]: 
             try:
                 proxies_dict = {"http": f"http://{proxy}", "https": f"http://{proxy}"}
-                # Gunakan POST agar tes lebih realistis dengan form upload
                 test = requests.get(UPLOAD_URL, proxies=proxies_dict, timeout=6)
                 if test.status_code == 200:
                     logging.info(f'✅ IP Aman Ditemukan dan Valid: {proxy}')
@@ -243,131 +236,124 @@ def get_safe_proxy(exclude_list):
         logging.error(f"Gagal mengambil proxy: {e}")
     return None
 
+# --- LOGIKA TINGKAT TINGGI: RADAR SATELIT (DORKING) ---
+def dork_search_lk21(keyword: str) -> list:
+    """Menggunakan DuckDuckGo untuk mencari di LK21 tanpa menyentuh Cloudflare LK21 sama sekali."""
+    logging.info("🛰️ [RADAR SATELIT] Mengekstraksi database LK21 via Search Engine Dorking (Bypass Cloudflare)...")
+    search_url = "https://html.duckduckgo.com/html/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    # Mencari di root domain agar kebal terhadap perubahan subdomain (tv12, tv24, dll)
+    data = {"q": f"site:lk21official.cc {keyword}"}
+    
+    try:
+        res = requests.post(search_url, headers=headers, data=data, timeout=10)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        
+        movies = []
+        seen = set()
+        
+        for a in soup.find_all('a', class_='result__url'):
+            href = a.get('href', '')
+            if 'lk21official.cc' in href:
+                # Bersihkan URL dari pelacak DuckDuckGo
+                if 'uddg=' in href:
+                    parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                    if 'uddg' in parsed:
+                        href = parsed['uddg'][0]
+                        
+                # Hindari link kategori, halaman pencarian, atau aktor
+                if any(x in href for x in ['/genre/', '/country/', '/year/', '/search/', '/aktor/', '?s=']):
+                    continue
+                    
+                if href not in seen:
+                    # Ambil judul yang rapi dari struktur URL (Slug)
+                    title = href.rstrip('/').split('/')[-1].replace('-', ' ').title()
+                    movies.append({'title': title, 'url': href})
+                    seen.add(href)
+                    
+        return movies
+    except Exception as e:
+        logging.error(f"Gagal melakukan Dorking: {e}")
+        return []
+
 def run_auto_lk21_flow() -> Path | None:
     if requests is None or BeautifulSoup is None:
-        print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
+        print("❌ requests/beautifulsoup4 tidak tersedia.")
         return None
     
-    BASE_DOMAIN = "https://tv12.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
     print("\n" + "="*50)
     print("🎬 LK21 SEARCH & AUTO-DETECTOR (STEALTH MODE)")
     print("="*50)
     
-    keyword = input("👉 Masukkan judul film (Contoh: Wonder Woman): ").strip()
+    keyword = input("👉 Masukkan judul film (Contoh: Evil Dead Rise): ").strip()
     if not keyword:
         return None
+        
+    # Eksekusi Radar Satelit
+    unique_movies = dork_search_lk21(keyword)
+            
+    if not unique_movies:
+        print("❌ Pencarian satelit tidak menemukan film (Pastikan judul benar, misalnya 'Evil Dead Rise' bukan 'Evil Dead Burn').")
+        manual_link = input("👉 Tempel/Paste link film LK21-nya secara manual (atau tekan Enter untuk batal): ").strip()
+        if not manual_link:
+            return None
+        slug = manual_link.rstrip('/').split('/')[-1]
+        download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
+        
+    else:
+        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian instan:\n")
+        for i, m in enumerate(unique_movies[:20], 1):
+            print(f"[{i}] {m['title'][:70]}")
+            
+        choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
+        try:
+            choice = int(choice)
+        except ValueError:
+            choice = 0
+            
+        if choice <= 0 or choice > len(unique_movies):
+            return None
+            
+        selected = unique_movies[choice-1]
+        slug = selected['url'].rstrip('/').split('/')[-1]
+        download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
     
-    print(f"\n🔍 Menghubungkan ke server LK21...")
-    driver = None
-    try:
-        driver = build_driver()
+    print("\n🎉 LINK DOWNLOAD BERHASIL DIRAKIT!")
+    print("👇 KLIK LINK DI BAWAH INI UNTUK MENYIMPANNYA KE GOOGLE DRIVE ANDA 👇")
+    print(f"📥 {download_url}")
+    print("-" * 50)
+    
+    old_files = set(search_mp4_files(SEARCH_DIR))
+    
+    print("\n⏳ Bot sedang memantau folder Google Drive Anda...")
+    print("   Silakan KLIK link di atas, dan pilih 'Tetap Download' di halaman Google.")
+    print("   Bot akan mendeteksi otomatis jika file sudah masuk...\n")
+    
+    while True:
+        time.sleep(3)
+        current_files = set(search_mp4_files(SEARCH_DIR))
+        new_files = current_files - old_files
         
-        driver.get(BASE_DOMAIN)
-        print("⏳ Menunggu verifikasi Cloudflare (jika ada)...")
-        time.sleep(8) 
-        
-        parsed_url = urlparse(driver.current_url)
-        ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
-        if ACTIVE_DOMAIN != BASE_DOMAIN:
-            print(f"🔄 Auto-Redirect Terdeteksi! Skrip beradaptasi ke domain baru: {ACTIVE_DOMAIN}")
-        else:
-            print(f"✅ Domain stabil: {ACTIVE_DOMAIN}")
+        if new_files:
+            new_file = sorted(list(new_files), key=lambda f: f.stat().st_mtime, reverse=True)[0]
+            print(f"🔔 File baru terdeteksi: {new_file.name}")
+            print("   Memastikan proses save/download selesai 100%...")
             
-        print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
-        search_query = keyword.replace(' ', '+')
-        driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
-        
-        time.sleep(5)
-        page_source = driver.page_source
-        
-        soup = BeautifulSoup(page_source, 'html.parser')
-        movies = []
-        
-        for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
-            title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
-            link_elem = article.find('a', href=True)
-            if title_elem and link_elem:
-                title = title_elem.get_text(strip=True)
-                if not title and title_elem.has_attr('title'):
-                    title = title_elem['title']
+            last_size = -1
+            while True:
+                time.sleep(3)
+                current_size = new_file.stat().st_size
+                if current_size == last_size and current_size > 0:
+                    break
+                last_size = current_size
                 
-                href = link_elem['href']
-                if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
-                    movies.append({'title': title, 'url': href})
-        
-        unique_movies = []
-        seen_urls = set()
-        for m in movies:
-            if m['url'] not in seen_urls:
-                unique_movies.append(m)
-                seen_urls.add(m['url'])
-                
-        if not unique_movies:
-            print("❌ Bot tidak menemukan film (Mungkin keamanan tingkat tinggi memblokir Datacenter IP atau film tidak ada).")
-            manual_link = input("👉 Tempel/Paste link film LK21-nya secara manual (atau tekan Enter untuk batal): ").strip()
-            if not manual_link:
-                return None
-            slug = manual_link.rstrip('/').split('/')[-1]
-            download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
-            
-        else:
-            print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
-            for i, m in enumerate(unique_movies[:20], 1):
-                print(f"[{i}] {m['title'][:70]}")
-                
-            choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
-            try:
-                choice = int(choice)
-            except ValueError:
-                choice = 0
-                
-            if choice <= 0 or choice > len(unique_movies):
-                return None
-                
-            selected = unique_movies[choice-1]
-            slug = selected['url'].rstrip('/').split('/')[-1]
-            download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
-        
-        print("\n🎉 LINK DOWNLOAD BERHASIL DIRAKIT!")
-        print("👇 KLIK LINK DI BAWAH INI UNTUK MENYIMPANNYA KE GOOGLE DRIVE ANDA 👇")
-        print(f"📥 {download_url}")
-        print("-" * 50)
-        
-        old_files = set(search_mp4_files(SEARCH_DIR))
-        
-        print("\n⏳ Bot sedang memantau folder Google Drive Anda...")
-        print("   Silakan KLIK link di atas, dan pilih 'Tetap Download' di halaman Google.")
-        print("   Bot akan mendeteksi otomatis jika file sudah masuk...\n")
-        
-        while True:
-            time.sleep(3)
-            current_files = set(search_mp4_files(SEARCH_DIR))
-            new_files = current_files - old_files
-            
-            if new_files:
-                new_file = sorted(list(new_files), key=lambda f: f.stat().st_mtime, reverse=True)[0]
-                print(f"🔔 File baru terdeteksi: {new_file.name}")
-                print("   Memastikan proses save/download selesai 100%...")
-                
-                last_size = -1
-                while True:
-                    time.sleep(3)
-                    current_size = new_file.stat().st_size
-                    if current_size == last_size and current_size > 0:
-                        break
-                    last_size = current_size
-                    
-                print("✅ File sudah utuh dan siap diproses!")
-                return new_file
-                
-    except Exception as e:
-        print(f"❌ Error saat pencarian: {e}")
-        return None
-    finally:
-        if driver: driver.quit()
+            print("✅ File sudah utuh dan siap diproses!")
+            return new_file
 
 def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
     logging.info('Membuka browser headless untuk upload ke desu.si...')
@@ -401,7 +387,7 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
         logging.info('Upload dimulai, menunggu hasil...')
         
         start_time = time.time()
-        max_wait_seconds = 86400  # Maksimal 24 Jam
+        max_wait_seconds = 86400  
 
         while time.time() - start_time < max_wait_seconds:
             try:
@@ -447,17 +433,14 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
             driver.quit()
 
 def smart_upload(file_path: str) -> str | None:
-    # Percobaan Pertama (Langsung, dengan jeda Cloudflare)
     link = upload_via_browser(file_path, proxy_ip=None)
     
-    # Percobaan Kedua (Dengan IP Rotator dan Memory Blacklist)
     if link == "403_BLOCKED":
         logging.warning("⚠️ Server secara aktif memblokir IP Datacenter kita.")
         logging.warning("🚀 Mengaktifkan Mode Jaringan Bypass (IP Rotator + WebRTC Kill)...")
         
         used_proxies = set()
         
-        # Tambahkan batas percobaan hingga 5 proxy berbeda jika diperlukan
         for attempt in range(5): 
             logging.info(f"\n🔄 --- MEMULAI PERCOBAAN PROXY KE-{attempt + 1} ---")
             safe_proxy = get_safe_proxy(exclude_list=used_proxies)
@@ -466,7 +449,7 @@ def smart_upload(file_path: str) -> str | None:
                 logging.error("❌ Gagal mendapatkan Proxy baru yang aman. Server Proxy mungkin habis.")
                 break
                 
-            used_proxies.add(safe_proxy) # Simpan IP ke dalam ingatan agar tidak dipakai lagi
+            used_proxies.add(safe_proxy) 
             
             link = upload_via_browser(file_path, proxy_ip=safe_proxy)
             if link and link != "403_BLOCKED":
