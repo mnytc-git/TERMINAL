@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Colab WebView (Posters) -> Auto-Scroll -> Zero-Byte Shredding -> Hardware Spoofing -> 3-Tier Search -> Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty
+Colab WebView (Posters) -> Auto-Scroll -> Zero-Byte Shredding -> Hardware Spoofing -> 3-Tier Search (Dual-Routing) -> Proxy Rotator -> WebRTC Killer -> Upload desu.si -> WatchParty
 """
 
 import logging
@@ -262,7 +262,6 @@ def render_colab_webview(movies_list):
         return False
         
     try:
-        # Menghasilkan blok HTML interaktif yang sangat indah
         html_content = '<div style="display: flex; flex-wrap: wrap; gap: 15px; padding: 15px; background-color: #1a1a2e; color: #fff; border-radius: 12px; max-height: 400px; overflow-y: auto;">'
         
         for idx, m in enumerate(movies_list[:20], 1):
@@ -287,7 +286,6 @@ def render_colab_webview(movies_list):
 def dork_search_lk21(keyword: str) -> list:
     logging.info("🛰️ [LAPIS 1] Mengekstraksi database LK21 via Search Engine Dorking (Bypass Cloudflare)...")
     
-    # FIX: Mengubah POST menjadi GET request standar agar lolos dari anti-bot DuckDuckGo
     encoded_query = urllib.parse.quote(f"site:lk21official.cc {keyword}")
     search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
     
@@ -317,7 +315,7 @@ def dork_search_lk21(keyword: str) -> list:
                     
                 if href not in seen:
                     title = href.rstrip('/').split('/')[-1].replace('-', ' ').title()
-                    movies.append({'title': title, 'url': href, 'image': ''}) # Dorking sulit mendapat gambar, pakai placeholder
+                    movies.append({'title': title, 'url': href, 'image': ''})
                     seen.add(href)
                     
         return movies
@@ -346,9 +344,9 @@ def run_auto_lk21_flow() -> Path | None:
     # === EKSEKUSI LAPIS 1 (RADAR SATELIT) ===
     unique_movies = dork_search_lk21(keyword)
     
-    # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH) ===
+    # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH - DUAL ROUTING) ===
     if not unique_movies:
-        print("\n❌ Radar Satelit gagal atau kosong (Mungkin film tidak ada atau diblokir). Beralih ke Lapis 2: Direct LK21 Search...")
+        print("\n❌ Radar Satelit gagal atau kosong. Beralih ke Lapis 2: Direct LK21 Search...")
         driver = None
         try:
             driver = build_driver()
@@ -360,52 +358,58 @@ def run_auto_lk21_flow() -> Path | None:
             parsed_url = urlparse(driver.current_url)
             ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
             
-            # FIX: LK21 CMS menggunakan /?s= bukan /search?s=
             search_query = keyword.replace(' ', '+')
-            target_url = f"{ACTIVE_DOMAIN}/?s={search_query}"
             
-            print(f"🔍 Mencari film '{keyword}' di {target_url}...")
-            driver.get(target_url)
+            # --- LOGIKA TINGKAT TINGGI: DUAL-ROUTING FALLBACK ---
+            # Mencoba URL default LK21 yang benar (/search?s=), lalu fallback ke (/?s=)
+            search_endpoints = [f"/search?s={search_query}", f"/?s={search_query}"]
             
-            time.sleep(5)
-            
-            # FIX: Injeksi Auto-Scroll agar gambar Poster (Lazy Load) ter-render semua
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(2) # Beri waktu agar gambar termuat
-            
-            page_source = driver.page_source
-            
-            soup = BeautifulSoup(page_source, 'html.parser')
-            movies = []
-            
-            # Ekstraksi beserta GAMBAR (Image Source)
-            for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
-                title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
-                link_elem = article.find('a', href=True)
-                img_elem = article.find('img')
+            for endpoint in search_endpoints:
+                target_url = f"{ACTIVE_DOMAIN}{endpoint}"
+                print(f"🔍 Mencari film '{keyword}' di {target_url}...")
+                driver.get(target_url)
                 
-                if title_elem and link_elem:
-                    title = title_elem.get_text(strip=True)
-                    if not title and title_elem.has_attr('title'):
-                        title = title_elem['title']
+                time.sleep(5)
+                
+                # Injeksi Auto-Scroll agar gambar Poster (Lazy Load) ter-render semua
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(2) 
+                
+                page_source = driver.page_source
+                soup = BeautifulSoup(page_source, 'html.parser')
+                movies = []
+                
+                # Ekstraksi beserta GAMBAR
+                for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
+                    title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
+                    link_elem = article.find('a', href=True)
+                    img_elem = article.find('img')
+                    
+                    if title_elem and link_elem:
+                        title = title_elem.get_text(strip=True)
+                        if not title and title_elem.has_attr('title'):
+                            title = title_elem['title']
+                            
+                        href = link_elem['href']
                         
-                    href = link_elem['href']
-                    
-                    # Curi Gambar
-                    img_src = ''
-                    if img_elem:
-                        img_src = img_elem.get('src') or img_elem.get('data-src') or ''
-                        if img_src.startswith('//'):
-                            img_src = 'https:' + img_src
-                    
-                    if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
-                        movies.append({'title': title, 'url': href, 'image': img_src})
-            
-            seen_urls = set()
-            for m in movies:
-                if m['url'] not in seen_urls:
-                    unique_movies.append(m)
-                    seen_urls.add(m['url'])
+                        img_src = ''
+                        if img_elem:
+                            img_src = img_elem.get('src') or img_elem.get('data-src') or ''
+                            if img_src.startswith('//'):
+                                img_src = 'https:' + img_src
+                        
+                        if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
+                            movies.append({'title': title, 'url': href, 'image': img_src})
+                
+                seen_urls = set()
+                for m in movies:
+                    if m['url'] not in seen_urls:
+                        unique_movies.append(m)
+                        seen_urls.add(m['url'])
+                
+                # Jika sudah ketemu di endpoint ini, hentikan pencarian dual-routing
+                if unique_movies:
+                    break
 
         except Exception as e:
             print(f"❌ Error saat Selenium Search: {e}")
@@ -424,10 +428,9 @@ def run_auto_lk21_flow() -> Path | None:
     else:
         print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian!\n")
         
-        # --- RENDER WEBVIEW COLAB (Menampilkan Gambar) ---
+        # --- RENDER WEBVIEW COLAB ---
         is_rendered = render_colab_webview(unique_movies)
         
-        # Jika bukan di Colab, tampilkan text terminal klasik
         if not is_rendered:
             for i, m in enumerate(unique_movies[:20], 1):
                 print(f"[{i}] {m['title'][:70]}")
