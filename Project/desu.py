@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Colab WebView (Posters) -> Zero-Byte Shredding -> Hardware Spoofing -> 3-Tier Search -> Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty
+Colab WebView (Posters) -> Auto-Scroll -> Zero-Byte Shredding -> Hardware Spoofing -> 3-Tier Search -> Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty
 """
 
 import logging
@@ -286,15 +286,19 @@ def render_colab_webview(movies_list):
 # --- LAPIS 1: RADAR SATELIT (DORKING) ---
 def dork_search_lk21(keyword: str) -> list:
     logging.info("🛰️ [LAPIS 1] Mengekstraksi database LK21 via Search Engine Dorking (Bypass Cloudflare)...")
-    search_url = "https://html.duckduckgo.com/html/"
+    
+    # FIX: Mengubah POST menjadi GET request standar agar lolos dari anti-bot DuckDuckGo
+    encoded_query = urllib.parse.quote(f"site:lk21official.cc {keyword}")
+    search_url = f"https://html.duckduckgo.com/html/?q={encoded_query}"
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
-    data = {"q": f"site:lk21official.cc {keyword}"}
     
     try:
-        res = requests.post(search_url, headers=headers, data=data, timeout=10)
+        res = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         
         movies = []
@@ -344,7 +348,7 @@ def run_auto_lk21_flow() -> Path | None:
     
     # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH) ===
     if not unique_movies:
-        print("\n❌ Radar Satelit gagal atau kosong (Mungkin film tidak ada). Beralih ke Lapis 2: Direct LK21 Search...")
+        print("\n❌ Radar Satelit gagal atau kosong (Mungkin film tidak ada atau diblokir). Beralih ke Lapis 2: Direct LK21 Search...")
         driver = None
         try:
             driver = build_driver()
@@ -356,11 +360,19 @@ def run_auto_lk21_flow() -> Path | None:
             parsed_url = urlparse(driver.current_url)
             ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
             
-            print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
+            # FIX: LK21 CMS menggunakan /?s= bukan /search?s=
             search_query = keyword.replace(' ', '+')
-            driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
+            target_url = f"{ACTIVE_DOMAIN}/?s={search_query}"
+            
+            print(f"🔍 Mencari film '{keyword}' di {target_url}...")
+            driver.get(target_url)
             
             time.sleep(5)
+            
+            # FIX: Injeksi Auto-Scroll agar gambar Poster (Lazy Load) ter-render semua
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(2) # Beri waktu agar gambar termuat
+            
             page_source = driver.page_source
             
             soup = BeautifulSoup(page_source, 'html.parser')
@@ -665,7 +677,7 @@ def main():
                 f.truncate(0)
             # 2. Unlink file (Meskipun masuk tong sampah, tidak akan makan Storage sama sekali)
             file_path.unlink()
-            print(f'✅ File asli di Google Drive berhasil dihapus secara total (0 Byte): {file_path.name}')
+            print(f'✅ File asli di Google Drive berhasil dihancurkan secara total (0 Byte): {file_path.name}')
             print('✅ Skenario Ultimate selesai dengan sempurna!')
         except Exception as e:
             print(f'\n⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
