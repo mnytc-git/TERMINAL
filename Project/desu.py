@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ULTIMATE AUTO-STREAMING BOT
-Hardware Spoofing -> 3-Tier Search -> Smart Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty -> Auto Delete
+Colab WebView (Posters) -> Zero-Byte Shredding -> Hardware Spoofing -> 3-Tier Search -> Proxy Rotator -> WebRTC Killer -> Stealth Mode -> Upload desu.si -> WatchParty
 """
 
 import logging
@@ -15,6 +15,13 @@ import random
 import urllib.parse
 from pathlib import Path
 from urllib.parse import urlparse
+
+# --- LOGIKA TINGKAT TINGGI: COLAB WEBVIEW ENGINE ---
+try:
+    from IPython.display import display, HTML, clear_output
+    IN_COLAB = True
+except ImportError:
+    IN_COLAB = False
 
 logging.basicConfig(
     level=logging.INFO,
@@ -155,25 +162,15 @@ def build_driver(proxy_server=None):
     driver = webdriver.Chrome(service=service, options=options)
     
     # --- LOGIKA TINGKAT TINGGI: BIOMETRIC & HARDWARE SPOOFING (CDP) ---
-    # Memanipulasi inti browser agar lolos dari tes sidik jari (Fingerprinting) Cloudflare & Nginx
     driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
         'source': '''
-            // Hapus jejak bot
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            
-            // Palsukan Plugins (Headless biasanya tidak punya plugins)
             Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            
-            // Palsukan Bahasa (Headless biasanya kaku)
             Object.defineProperty(navigator, 'languages', { get: () => ['id-ID', 'id', 'en-US', 'en'] });
-            
-            // Palsukan Keberadaan Chrome Global Object
             window.chrome = { runtime: {} };
             
-            // Memalsukan Hardware VGA (WebGL Spoofing)
             const getParameter = WebGLRenderingContext.prototype.getParameter;
             WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                // 37445 = Vendor, 37446 = Renderer
                 if (parameter === 37445) return 'Intel Inc.';
                 if (parameter === 37446) return 'Intel(R) Iris(R) Xe Graphics';
                 return getParameter.apply(this, arguments);
@@ -230,7 +227,6 @@ def check_google_drive() -> bool:
         return False
     return True
 
-# --- LOGIKA TINGKAT TINGGI: PROXY MEMORY & SHUFFLE ---
 def get_safe_proxy(exclude_list):
     if requests is None:
         return None
@@ -259,6 +255,33 @@ def get_safe_proxy(exclude_list):
     except Exception as e:
         logging.error(f"Gagal mengambil proxy: {e}")
     return None
+
+# --- WEBVIEW ENGINE: MENAMPILKAN HTML GALERI FILM DI COLAB ---
+def render_colab_webview(movies_list):
+    if not IN_COLAB or not movies_list:
+        return False
+        
+    try:
+        # Menghasilkan blok HTML interaktif yang sangat indah
+        html_content = '<div style="display: flex; flex-wrap: wrap; gap: 15px; padding: 15px; background-color: #1a1a2e; color: #fff; border-radius: 12px; max-height: 400px; overflow-y: auto;">'
+        
+        for idx, m in enumerate(movies_list[:20], 1):
+            img_src = m.get('image') or 'https://via.placeholder.com/200x300/2c3e50/ffffff?text=No+Poster'
+            title = m.get('title', 'Unknown Title')
+            
+            html_content += f'''
+            <div style="width: 130px; background-color: #16213e; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; align-items: center; box-shadow: 0 4px 8px rgba(0,0,0,0.3); border: 1px solid #0f3460;">
+                <div style="background: #e94560; color: white; width: 28px; height: 28px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-weight: bold; margin-bottom: 8px; box-shadow: 0 2px 4px rgba(233,69,96,0.5);">{idx}</div>
+                <img src="{img_src}" style="width: 100%; height: 180px; object-fit: cover; border-radius: 6px; margin-bottom: 10px;">
+                <span style="font-size: 11px; text-align: center; line-height: 1.3; font-weight: bold; word-wrap: break-word; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;">{title}</span>
+            </div>
+            '''
+        html_content += '</div>'
+        display(HTML(html_content))
+        return True
+    except Exception as e:
+        logging.error(f"Gagal merender WebView: {e}")
+        return False
 
 # --- LAPIS 1: RADAR SATELIT (DORKING) ---
 def dork_search_lk21(keyword: str) -> list:
@@ -290,7 +313,7 @@ def dork_search_lk21(keyword: str) -> list:
                     
                 if href not in seen:
                     title = href.rstrip('/').split('/')[-1].replace('-', ' ').title()
-                    movies.append({'title': title, 'url': href})
+                    movies.append({'title': title, 'url': href, 'image': ''}) # Dorking sulit mendapat gambar, pakai placeholder
                     seen.add(href)
                     
         return movies
@@ -300,14 +323,14 @@ def dork_search_lk21(keyword: str) -> list:
 
 def run_auto_lk21_flow() -> Path | None:
     if requests is None or BeautifulSoup is None:
-        print("❌ requests/beautifulsoup4 tidak tersedia. Install dengan: pip install requests beautifulsoup4")
+        print("❌ requests/beautifulsoup4 tidak tersedia.")
         return None
     
     BASE_DOMAIN = "https://tv12.lk21official.cc"
     DOWNLOAD_DOMAIN = "https://dadadidi.de/get"
     
     print("\n" + "="*50)
-    print("🎬 LK21 SEARCH & AUTO-DETECTOR (3-TIER SYSTEM)")
+    print("🎬 LK21 SEARCH & AUTO-DETECTOR (3-TIER + WEBVIEW)")
     print("="*50)
     
     keyword = input("👉 Masukkan judul film (Contoh: Evil Dead Rise): ").strip()
@@ -319,9 +342,9 @@ def run_auto_lk21_flow() -> Path | None:
     # === EKSEKUSI LAPIS 1 (RADAR SATELIT) ===
     unique_movies = dork_search_lk21(keyword)
     
-    # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH - KODE UTUH) ===
+    # === EKSEKUSI LAPIS 2 (SELENIUM DIRECT SEARCH) ===
     if not unique_movies:
-        print("\n❌ Radar Satelit gagal atau kosong. Beralih ke Lapis 2: Direct Selenium Search...")
+        print("\n❌ Radar Satelit gagal atau kosong (Mungkin film tidak ada). Beralih ke Lapis 2: Direct LK21 Search...")
         driver = None
         try:
             driver = build_driver()
@@ -333,11 +356,6 @@ def run_auto_lk21_flow() -> Path | None:
             parsed_url = urlparse(driver.current_url)
             ACTIVE_DOMAIN = f"{parsed_url.scheme}://{parsed_url.netloc}"
             
-            if ACTIVE_DOMAIN != BASE_DOMAIN:
-                print(f"🔄 Auto-Redirect Terdeteksi! Skrip beradaptasi ke domain baru: {ACTIVE_DOMAIN}")
-            else:
-                print(f"✅ Domain stabil: {ACTIVE_DOMAIN}")
-                
             print(f"🔍 Mencari film '{keyword}' di {ACTIVE_DOMAIN}...")
             search_query = keyword.replace(' ', '+')
             driver.get(f"{ACTIVE_DOMAIN}/search?s={search_query}")
@@ -348,18 +366,28 @@ def run_auto_lk21_flow() -> Path | None:
             soup = BeautifulSoup(page_source, 'html.parser')
             movies = []
             
-            # SELEKTOR SAPU JAGAT LAMA
+            # Ekstraksi beserta GAMBAR (Image Source)
             for article in soup.select('.post-item, article, .item-series, .film-item, div[class*="item"]'):
                 title_elem = article.find(['h2', 'h3']) or article.find('a', title=True)
                 link_elem = article.find('a', href=True)
+                img_elem = article.find('img')
+                
                 if title_elem and link_elem:
                     title = title_elem.get_text(strip=True)
                     if not title and title_elem.has_attr('title'):
                         title = title_elem['title']
-                    
+                        
                     href = link_elem['href']
+                    
+                    # Curi Gambar
+                    img_src = ''
+                    if img_elem:
+                        img_src = img_elem.get('src') or img_elem.get('data-src') or ''
+                        if img_src.startswith('//'):
+                            img_src = 'https:' + img_src
+                    
                     if title and len(href) > 2 and 'javascript' not in href and '#' not in href:
-                        movies.append({'title': title, 'url': href})
+                        movies.append({'title': title, 'url': href, 'image': img_src})
             
             seen_urls = set()
             for m in movies:
@@ -374,7 +402,7 @@ def run_auto_lk21_flow() -> Path | None:
 
     # === EKSEKUSI LAPIS 3 (MANUAL FALLBACK) ===
     if not unique_movies:
-        print("\n❌ Lapis 1 & Lapis 2 diblokir oleh sistem keamanan Cloudflare LK21.")
+        print("\n❌ Lapis 1 & Lapis 2 tidak menemukan film (Film benar-benar tidak ada di LK21 atau diblokir kuat).")
         manual_link = input("👉 (LAPIS 3) Tempel/Paste link film LK21-nya secara manual (atau Enter untuk batal): ").strip()
         if not manual_link:
             return None
@@ -382,11 +410,17 @@ def run_auto_lk21_flow() -> Path | None:
         download_url = f"{DOWNLOAD_DOMAIN}/{slug}"
         
     else:
-        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian:\n")
-        for i, m in enumerate(unique_movies[:20], 1):
-            print(f"[{i}] {m['title'][:70]}")
+        print(f"\n✅ Ditemukan {len(unique_movies)} hasil pencarian!\n")
+        
+        # --- RENDER WEBVIEW COLAB (Menampilkan Gambar) ---
+        is_rendered = render_colab_webview(unique_movies)
+        
+        # Jika bukan di Colab, tampilkan text terminal klasik
+        if not is_rendered:
+            for i, m in enumerate(unique_movies[:20], 1):
+                print(f"[{i}] {m['title'][:70]}")
             
-        choice = input("\n👉 Pilih nomor film (0 untuk batal): ")
+        choice = input("\n👉 Pilih nomor film pada gambar/daftar di atas (0 untuk batal): ")
         try:
             choice = int(choice)
         except ValueError:
@@ -443,8 +477,6 @@ def upload_via_browser(file_path: str, proxy_ip=None) -> str | None:
         logging.info('Navigasi ke desu.si...')
         driver.get(UPLOAD_URL)
         
-        # --- LOGIKA TINGKAT TINGGI: HUMAN DELAY JITTER ---
-        # Menunggu dengan waktu acak (bukan 10 detik kaku) agar terlihat natural
         delay_time = round(random.uniform(9.3, 14.7), 1)
         logging.info(f'⏳ Menunggu {delay_time} detik agar sistem keamanan (WAF/Cloudflare) merekam aktivitas natural...')
         time.sleep(delay_time) 
@@ -543,7 +575,7 @@ def play_on_watchparty(video_link: str, room_url: str):
     logging.info('\n🤖 [AUTO-PLAY] Menghubungkan ke WatchParty Room...')
     driver = None
     try:
-        driver = build_driver() # Tidak butuh proxy untuk auto-play
+        driver = build_driver() 
         driver.get(room_url)
         wait = WebDriverWait(driver, 20)
 
@@ -625,9 +657,15 @@ def main():
         
         play_on_watchparty(link, ROOM_URL)
         
+        # --- LOGIKA TINGKAT TINGGI: ZERO-BYTE SHREDDING (Hapus Permanen Drive) ---
         try:
+            print(f'\n🗑️ Memulai penghapusan permanen (Bypass Google Drive Trash)...')
+            # 1. Timpa isi file menjadi kosong (0 Byte)
+            with open(file_path, 'wb') as f:
+                f.truncate(0)
+            # 2. Unlink file (Meskipun masuk tong sampah, tidak akan makan Storage sama sekali)
             file_path.unlink()
-            print(f'\n🗑️ File asli di Google Drive berhasil dihapus: {file_path.name}')
+            print(f'✅ File asli di Google Drive berhasil dihapus secara total (0 Byte): {file_path.name}')
             print('✅ Skenario Ultimate selesai dengan sempurna!')
         except Exception as e:
             print(f'\n⚠️ Link berhasil didapatkan, tapi gagal menghapus file di Drive: {e}')
